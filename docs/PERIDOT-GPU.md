@@ -39,6 +39,22 @@ Clock offsets come from Xiaomi's published
 and [gcc-cliffs.c](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/peridot-u-oss/drivers/clk/qcom/gcc-cliffs.c).
 Firmware bytes have not yet been collected or authenticated for this work.
 
+The manufacturer's [SM8635 KGSL profile](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8635/blob/1a24977367ee2d77998fc6957eb61a99331a347d/vendor/qcom/opensource/graphics-kernel/adreno-gpulist.h#L2459)
+independently matches the actual module's gen7_11_0 firmware names and hardware
+scheduler. It specifies 1536 KiB GMEM, 16 MiB UCHE alignment, highest bank bit16,
+a 200 MHz GMU hub target and a 2196 KiB context record. It shares gen7_2_0
+clock-gating/GBIF tables and gen7_0_0 protected registers; these are deliberate
+profile references, not a reason to import all A740 initialization tables.
+This is another vendor's SM8635 release: compare any register sequence with
+the phone's module and DT before using it.
+
+Its [GMU implementation](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8635/blob/1a24977367ee2d77998fc6957eb61a99331a347d/vendor/qcom/opensource/graphics-kernel/adreno_gen7_gmu.c#L32)
+defines ITCM at0/16KiB, cache at0x4000/(16MiB-16KiB), DTCM at0x10004000/16KiB,
+and noncached kernel ranges at0x60000000 and0xc0000000, each512MiB. Firmware
+zero-payload headers can request preallocations; load records then target
+these ranges. Collect and parse the matching image before choosing private
+GMU mappings. A generic driver's fixed debug/HFI windows are insufficient.
+
 ## Implementation route
 
 For the existing iOS16 userland, the practical frontend is the EAGL/OpenGL ES

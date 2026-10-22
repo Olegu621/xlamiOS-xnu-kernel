@@ -31,6 +31,10 @@ The boot and recovery partitions are preserved during these sessions.
 | Panel rails | AVDD and IOVDD voted through RPMh, reset sequenced on the panel's GPIO |
 | Diagnostics | Every boot leaves a persistent console log on the device; the screen can be captured as a PNG from the kernel |
 
+Patch0113 adds full-panel1220×2712 presentation of the existing1125×2436 iOS
+scene, with matching inverse touch coordinates. Host checks pass; hardware
+validation is pending. This currently uses CPU scaling.
+
 ## Not there yet
 
 - No GPU driver: everything is drawn by the CPU.

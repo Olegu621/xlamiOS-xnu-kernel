@@ -16,6 +16,15 @@ This paragraph overrides stale work plans and untested-touch claims below.**
 
 ### 0112 GPU inventory +0113 full-panel presentation — prepared
 
+- Commit219034b; CI39808131342 running. Actual scaler ASan/UBSan harness
+  rerun passes. No fastboot/ADB device currently enumerated; phone remains
+  on ordinary0111 until manually returned to fastboot. No0113 hardware result.
+- Found primary OnePlus SM8635 KGSL at1a24977367ee2d77998fc6957eb61a99331a347d.
+  Exact gen7_11_0 profile agrees with recovery module firmware/hwsched;
+  confirms1536KiB GMEM,16MiB UCHE align, hub200MHz, context2196KiB.
+  VMA/firmware preallocation details recorded in docs/PERIDOT-GPU.md;
+  downloaded sources stay ignored under research/kgsl-sm8635.
+
 -0113 fills the physical1220x2712 panel from the working1125x2436 logical
   iOS scene. Both framebuffer and digitizer use SweetDisplayGeometry.h
   for the exact same physical-pixel -> logical-pixel mapping. The working
