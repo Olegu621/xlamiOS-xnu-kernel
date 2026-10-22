@@ -4,6 +4,35 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0115 preparation (2026-10-23, continued from the 0114 handoff; phone still on ordinary0113)
+
+- New patch xnu/patches/0115-peridot-cx-ahb-clock-stage.patch adds peridotgpu=3:
+  hold the previously collapsed CX domain live and toggle ONLY the
+  configuration AHB gate at GPUCC0x90c8 (MiCode gpucc-cliffs.c; BRANCH_HALT_DELAY
+  class so the status bit is ignored and the enable bit readback is the check).
+  sweetgpuhold (25..1000, default100, stage cap 200 ms) bounds the live window.
+  Same refusal/ownership/restore rules as 0114: refuse live domains, unreadable
+  gate values, bits beyond ON and STATUS, and an already-on gate before any
+  write. Restore gate then CX collapse with the bounded 50 ms waits. No GMU,
+  GPU-core, SMMU, RCG or vote writes and no firmware upload.
+- Host check research/diagnostics-20261022/check-gpu-clock.c (ASan/UBSan) PASS:
+  on/off 4-write full restore, zero-write refusals for domain and gate shapes,
+  CX on/off timeouts, gate enable and restore timeouts, ownership changes and
+  bounded polls preserving unrelated bits.
+- Local kernel cross-compile PASS with tools/xnu-cc.py on the 0112 CI build log
+  and the 0114 buildtree (fresh swiftlang clang17 under /home/admin/swift; the
+  previous /root/swift toolchain disappeared with the boot). Object under
+  research/clipkobjs (0 of 1 files failed).
+- Patch applies in CI order on the 0114 buildtree and its reverse dry-run
+  returns the exact 0114 state.
+- NEXT: commit+push expect xnu.yml CI; when the artifact lands, build
+  shim-boot-0115-ahb.img with peridotgpu=3 sweetdiagreset=sweetgpuhold and boot
+  timing; read back AHB/CX/GX values against the 0112 inventory. Manual phone
+  return to fastboot is required first; preserve the recovery BCB.
+- Phone state: ordinary0113 temporary boot image still displayed (no ADB or
+  fastboot enumeration is expected for XNU with USB disabled). Do not repeat
+  any boot attempt until the user confirms the fastboot screen.
+
 ### LATEST GPU0114 (2026-10-22 ~16:28UTC)
 
 - Session finish: ordinary0113 temporary boot accepted~16:28UTC, saved

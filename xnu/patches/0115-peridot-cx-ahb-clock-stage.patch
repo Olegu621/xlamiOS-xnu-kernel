@@ -1,0 +1,176 @@
+--- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 01:46:32.838940375 +0300
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 01:50:00.595190927 +0300
+@@ -84,4 +84,112 @@
+ 	}
+ 	return powered ? PGPU_POWER_PASS : PGPU_POWER_ON_TIMEOUT;
+ }
++
++/* Mode3 stage. Holds the previously collapsed CX domain live while ONLY the
++ * configuration AHB gate (0x90c8) is toggled, then restores both. This gate
++ * is from MiCode gpucc-cliffs.c and is a BRANCH_HALT_DELAY class branch: its
++ * status reads cannot prove switching, so the enable bit readback is the
++ * check. Refuse unreadable gate values, unknown bits beyond ON and STATUS,
++ * and an already-on gate. Hard bounds are the power-stage ones: bounded 50ms
++ * waits, restore-on-timeout, and leave for the diagnostic reset when
++ * ownership changes unexpectedly. No GMU, GPU core or SMMU access, no other
++ * gates, RCGs, votes or resets, and no firmware upload.
++ */
++#define PGPU_AHB_CBCR 0x90c8u
++#define PGPU_AHB_ON 1u
++#define PGPU_AHB_STATUS (1u << 31)
++#define PGPU_AHB_KNOWN (PGPU_AHB_ON | PGPU_AHB_STATUS)
++
++enum pgpu_clock_result {
++	PGPU_CLOCK_REFUSED = 0,
++	PGPU_CLOCK_PASS,
++	PGPU_CLOCK_ON_TIMEOUT,
++	PGPU_CLOCK_AHB_ON_TIMEOUT,
++	PGPU_CLOCK_AHB_RESTORE_TIMEOUT,
++	PGPU_CLOCK_OFF_TIMEOUT,
++	PGPU_CLOCK_OWNERSHIP_LOST
++};
++
++static inline bool
++pgpu_ahb_gate_settled(const struct pgpu_power_io *io, bool on)
++{
++	for (unsigned i = 0; i < 500; ++i) {
++		io->delay_us(100);
++		uint32_t gate = io->read(io->context, PGPU_AHB_CBCR);
++		if (gate == UINT32_MAX) {
++			return false;
++		}
++		if (((gate & PGPU_AHB_ON) != 0) == on) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/* hold_ms is capped at200 inside the stage so the whole sequence stays
++ * inside the diagnostic reset budget; the boot-arg validation belongs to
++ * board support. */
++static inline enum pgpu_clock_result
++pgpu_cx_hold_ahb_stage(const struct pgpu_power_io *io, unsigned hold_ms,
++    uint32_t *cx_final, uint32_t *gx_final, uint32_t *ahb_final)
++{
++	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
++	uint32_t hw = io->read(io->context, PGPU_CX_HW);
++	uint32_t gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (!pgpu_collapsed(cx) || !pgpu_collapsed(gx) ||
++	    hw == UINT32_MAX || (hw & PGPU_ON)) {
++		return PGPU_CLOCK_REFUSED;
++	}
++	uint32_t gate = io->read(io->context, PGPU_AHB_CBCR);
++	if (gate == UINT32_MAX || (gate & ~PGPU_AHB_KNOWN) ||
++	    (gate & PGPU_AHB_ON)) {
++		return PGPU_CLOCK_REFUSED;
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx & ~PGPU_COLLAPSE);
++	bool powered = pgpu_power_wait(io, true);
++	bool gate_leg = true;
++	cx = io->read(io->context, PGPU_CX_GDSCR);
++	gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (cx == UINT32_MAX || (cx & (PGPU_HW_CONTROL | PGPU_OVERRIDE)) ||
++	    !pgpu_collapsed(gx)) {
++		return PGPU_CLOCK_OWNERSHIP_LOST;
++	}
++	if (powered) {
++		io->write(io->context, PGPU_AHB_CBCR, gate | PGPU_AHB_ON);
++		bool settled = pgpu_ahb_gate_settled(io, true);
++		if (settled) {
++			unsigned hold = hold_ms > 200 ? 200 : hold_ms;
++			for (unsigned i = 0; i < hold * 10; ++i) {
++				io->delay_us(100);
++			}
++		}
++		io->write(io->context, PGPU_AHB_CBCR, gate);
++		if (!pgpu_ahb_gate_settled(io, false)) {
++			return PGPU_CLOCK_AHB_RESTORE_TIMEOUT;
++		}
++		/* A no records only when the enable readback did not come; every
++		 * other piece of state is already restored here. */
++		if (!settled) {
++			gate_leg = false;
++		}
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx | PGPU_COLLAPSE);
++	if (!pgpu_power_wait(io, false) ||
++	    !pgpu_collapsed(io->read(io->context, PGPU_CX_GDSCR))) {
++		return PGPU_CLOCK_OFF_TIMEOUT;
++	}
++	if (cx_final) {
++		*cx_final = io->read(io->context, PGPU_CX_GDSCR);
++	}
++	if (gx_final) {
++		*gx_final = io->read(io->context, PGPU_GX_GDSCR);
++	}
++	if (ahb_final) {
++		*ahb_final = io->read(io->context, PGPU_AHB_CBCR);
++	}
++	if (!gate_leg) {
++		return PGPU_CLOCK_AHB_ON_TIMEOUT;
++	}
++	return powered ? PGPU_CLOCK_PASS : PGPU_CLOCK_ON_TIMEOUT;
++}
+ #endif
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 01:46:32.394942249 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 01:48:30.796488234 +0300
+@@ -1,8 +1,10 @@
+ /* Peridot Adreno735 handoff inventory. Clocks from MiCode peridot-u-oss
+  * gcc-cliffs.c/gpucc-cliffs.c; power-domain offsets from the live DT reg
+  * properties (some node unit addresses do NOT equal their reg addresses).
+- * peridotgpu=1 reads handoff only. Mode2 also pulses an idle CX domain,
+- * with a diagnostic reset timer required. No firmware/GPU/GMU/SMMU access.
++ * peridotgpu=1 reads handoff only. Mode2 also pulses an idle CX domain and
++ * mode3 holds it while testing the configuration AHB gate (0x90c8); a
++ * diagnostic reset timer is required for both. No firmware/GPU/GMU/SMMU
++ * or core register access, no other gate or RCG writes.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -42,7 +44,7 @@
+ 	static bool attempted;
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if ((mode != 1 && mode != 2) || attempted) {
++	if ((mode != 1 && mode != 2 && mode != 3) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -101,5 +103,36 @@
+ 		    names[result], pgpu_read(cc, PGPU_CX_GDSCR),
+ 		    pgpu_read(cc, PGPU_CX_HW), pgpu_read(cc, PGPU_GX_GDSCR));
+ 	}
++	if (mode == 3) {
++		uint32_t reset = 0;
++		uint32_t hold = 100;
++		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
++		PE_parse_boot_argn("sweetgpuhold", &hold, sizeof(hold));
++		if (reset < 30 || reset > 3600) {
++			printf("PERIDOT GPU: CX hold + AHB gate test refused: diagnostic reset timer required\n");
++			return;
++		}
++		if (hold < 25 || hold > 1000) {
++			hold = 100;
++		}
++		printf("PERIDOT GPU: CX hold + AHB gate test: gate0x90c8 only, bounded50ms per transition, hold%u\n",
++		    hold);
++		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		uint32_t cx_out = 0, gx_out = 0, ahb_out = 0;
++		enum pgpu_clock_result result = pgpu_cx_hold_ahb_stage(&io, hold,
++		    &cx_out, &gx_out, &ahb_out);
++		static const char *const names[] = {
++			"REFUSED live/unknown domain or unreadable/busy gate",
++			"PASS gate held then restored and CX restored",
++			"FAIL CX power-on timeout; collapse restored",
++			"FAIL AHB gate never switched on; original value restored",
++			"FAIL AHB gate restore timeout; left for diagnostic reset",
++			"FAIL CX collapse timeout",
++			"FAIL ownership changed; leave for diagnostic reset"
++		};
++		printf("PERIDOT GPU: AHB gate test %s; CX=%#x hw=%#x GX=%#x AHB=%#x\n",
++		    names[result], cx_out, pgpu_read(cc, PGPU_CX_HW), gx_out,
++		    ahb_out);
++	}
+ }
+ #endif
