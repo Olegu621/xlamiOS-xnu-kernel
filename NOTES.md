@@ -371,8 +371,24 @@ sensor. The recovery's real Goodix driver registers that input device.
   sweetdiagreset=60. A valid BERLIN version and a checksummed IC_INFO mean
   the transport works, and the touch poller candidate (spi.gpi-power-
   touch-candidate.c) can then be rebased onto it.
+- **0108 HARDWARE PASS (CI 39788746824, commit3943ce9).** cycle-bitbang-0108:
+  the RPMh votes for ldob13/ldob23 were accepted, the panel answered over
+  the bit-banged SPI, the version block starts with "BERL" (BERLIN), its
+  checksum is valid, the chip is 9916R with the patch id 05800617, and the
+  chip description is 197 bytes with a valid checksum, the touch report at
+  0x10308, an eight byte header and eight byte points. Exactly what the
+  recovery's own driver found. The screen capture (0107 chunked rows) also
+  decoded into a PNG. The serial engine was never used for the transfer.
+- 0109 turns that into the touch path: a poller thread reads the report
+  address, validates the status byte and both checksums, acknowledges the
+  frame with a single F0 write and delivers the contacts to the HID
+  digitizer, which maps the 1220x2712 panel onto the 1125x2436 logical
+  surface. No finger has touched the screen yet, so the first test is
+  whether the poller reports anything and whether iOS reacts.
 - The project now lives in the public repository Olegu621/xlamiOS (the whole
-  history); Olegu621/ios-sweet stays as the legacy remote.
+  history); Olegu621/ios-sweet stays as the legacy remote. The related
+  projects and how they fit together are in docs/UNIFICATION.md and
+  docs/PERIDOT-ECOSYSTEM.md.
 
 - Further read-only recovery evidence: DMAengine summary shows a90000.spi on
   dma1chan0/1; gpi_dmaa00000_gpii0 IPC logs show routine successful Goodix
