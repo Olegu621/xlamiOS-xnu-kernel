@@ -43,6 +43,13 @@ This paragraph overrides stale work plans and untested-touch claims below.**
 - tools/xnu-cc.py now infers the CI checkout directory from the log after
   repo renames; old1034-command log and renamed-path command both parse.
 
+- Ordinary boot accepted at~15:23 UTC; no recovery/fastboot enumeration by
+  15:25:39. This is the expected USB state of XNU (native USB not enabled),
+  not independent proof of the visible GUI. Physical UI confirmation pending.
+- Released OUR temporary host sleep inhibitor PID803348/child803363 after
+  the cycles. Old sections claiming it is running are superseded. No active
+  boot-cycle process remains. Next hardware work needs recovery again.
+
 ### 0111 review of OpenCode touch poller — current work
 
 - Latest actual OpenCode session ses_e9c5aa07fffexFTMAW0nA0vhWl ends at
