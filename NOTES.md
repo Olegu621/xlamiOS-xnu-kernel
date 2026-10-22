@@ -345,6 +345,35 @@ sensor. The recovery's real Goodix driver registers that input device.
   4 relaxed, 6 relaxed+TX doorbell first, 15 all variants). A passing
   69-byte loopback unlocks the real Goodix reads and then touch.
 
+### 0108: bit-banged SPI (the simple path) and the touch rails
+
+- The HackiOS project (github.com/oosexgang/hackios-xnu-kernel, POCO X5 Pro
+  / SM7780) solved the same class of problem: XNU on a Qualcomm phone with a
+  Goodix touch panel. Its xnu/files/bsd/dev/redwood_goodix.c drives the panel
+  either through the serial engine FIFO or, when the engine cannot be used,
+  by BIT-BANGGING SPI on the four panel pins. Their framing matches the
+  BerlinD driver exactly (linux-ref/goodix_berlin_spi.c): read = 0xF1 +
+  address(BE32) + three 0xff dummy bytes + payload, and the payload arrives
+  in the byte phases after the eight byte prefix. Their checksum is the
+  16-bit sum of the block's bytes in its last two bytes.
+- Our serial engine reports IF=1 (no FIFO interface), so the FIFO path can
+  never receive on this board, and the GPI DMA path is still missing its
+  completion event. Bit-banging needs no SMMU, no GPI and no engine at all:
+  the live DT gives gpio16=MISO, gpio17=MOSI, gpio18=CLK, gpio19=CS.
+- 0108 adds that transport to sweet_spi_peridot.c (probe 6): the four pins
+  are muxed back to plain GPIOs (CTL function 0, 6 mA, OE bit 9 per
+  pinctrl-cliffs), CS idles high, SPI mode 0, MSB first, chip selected for
+  the whole transfer, then the same F1 read path and checksum as before.
+  The panel rails come from the prepared sweet_rpmh_peridot.c candidate
+  (ldob13 3.3 V, ldob23 1.8 V, whitelist and readback only) plus the reset
+  sequence on GPIO128.
+- Next: CI0108, then a temporary boot with peridotspi=6 and
+  sweetdiagreset=60. A valid BERLIN version and a checksummed IC_INFO mean
+  the transport works, and the touch poller candidate (spi.gpi-power-
+  touch-candidate.c) can then be rebased onto it.
+- The project now lives in the public repository Olegu621/xnu-peridot-ios
+  (the whole history); Olegu621/ios-sweet stays as the legacy remote.
+
 - Further read-only recovery evidence: DMAengine summary shows a90000.spi on
   dma1chan0/1; gpi_dmaa00000_gpii0 IPC logs show routine successful Goodix
   health reads and RX/TX completions. Live DT dmas args4=2 decodes through
