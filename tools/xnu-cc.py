@@ -20,6 +20,7 @@ Env: XNU_CC_EXTRA   extra flags (e.g. "-DKPERF -DKPC" for config changes)
 import concurrent.futures as cf, os, re, shlex, subprocess, sys
 from collections import Counter
 
+# Replaced by the first source command in the log, including renamed repos.
 CI_DXB = '/Users/runner/work/ios-sweet/ios-sweet/dxb'
 CI_SDK_PLATFORM = re.compile(r'/Applications/Xcode[^ ]*?\.sdk/+System/Library/Frameworks/Kernel\.framework/Versions/A/PrivateHeaders/platform')
 CLANG = os.path.expanduser('~/swift/usr/bin/clang')
@@ -29,6 +30,7 @@ COMPONENTS = ('osfmk', 'bsd', 'iokit', 'libkern', 'pexpert', 'security', 'san', 
 
 
 def commands(log):
+    global CI_DXB
     seen = {}
     for line in open(log, errors='replace'):
         if '/clang' not in line or ' -c ' not in line:
@@ -41,8 +43,13 @@ def commands(log):
             args = shlex.split(m.group(3), posix=True)
         except ValueError:	# shell fragments with unbalanced quotes: not a plain compile
             continue
-        srcs = [a for a in args if re.search(r'\.(c|cpp|s|S)$', a) and a.startswith(CI_DXB)]
+        srcs = [a for a in args if re.search(r'\.(c|cpp|s|S)$', a) and '/dxb/xnu/' in a]
         if len(srcs) == 1 and '/xnu/' in srcs[0]:
+            root = srcs[0].split('/dxb/xnu/', 1)[0] + '/dxb'
+            if not seen:
+                CI_DXB = root
+            elif root != CI_DXB:
+                raise ValueError('compile log mixes different XNU checkout paths')
             seen[srcs[0]] = ('clang++' if m.group(2) else 'clang', args)
     return seen
 
