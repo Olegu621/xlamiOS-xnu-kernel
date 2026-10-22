@@ -301,6 +301,50 @@ sensor. The recovery's real Goodix driver registers that input device.
   existing sweethidtest may keep UI awake. No questions/physical tests while
   user is absent. Power and touch candidates below remain uncommitted.
 
+### 0104 hardware: the GPI DMA path works, the completion event does not
+
+- CI0104/0105 **39776739626 succeeded**, commitaa5d035; artifact SHA256SUMS
+  verified, CI tree matches the local GPI/framebuffer sources exactly.
+  Image shim/out/shim-boot-0104-gpi.img (SHA ecdfac2d0b106f523832a7e82893
+  0c78ca5e21671142fe44e694129af0a00413) with
+  peridotspi=4 sweetfbshot=60 sweetdiagreset=90. cycle-0104-gpi returned to
+  recovery automatically after the timer, NO panic, log 212176 bytes.
+- **The GPI DMA transfer itself WORKS.** The private RX buffer held the
+  echoed loopback bytes (RX sample f1 00 01 00 = the transmitted Goodix F1
+  read header) and the SE reported rxlen=0x45=69 bytes. So the TX buffer,
+  the ring, the SMMU routes and the RX DMA path all work on hardware.
+- **What fails is the completion event.** The transfer timed out with
+  done=0: the event ring produced ~412k events, all of them QUP_NOTIF
+  (type 0x31, chid 0, code 1, growing count), and no XFER_COMPLETE event
+  was ever accepted. Our matcher only accepted code 2 (EOT) and an exact
+  pointer/length match, so even a code 1/4 event would have been ignored.
+- Event ring pointers in the context registers hold the LOW 32 BITS of the
+  physical address (0xc3e4b080 = arena+0x3080), the same truncation the
+  doorbell uses. The 32-bit arithmetic in the driver is therefore correct.
+- GPI channel context states after the timeout: TX 0x1020001a (STARTED),
+  RX 0x10200112 (STARTED, error bit 0x100), EV 0x10110012. The TX channel
+  consumed only the CONFIG0 and GO TREs, not the TX DMA TRE, while the RX
+  channel consumed none.
+- The SE was in DMA mode (0x258=1), GSI events 0xf, M/S status
+  0x40000080/0xc000000, M_CMD 0x18000000, clk 0x21, loopback on, txlen 0,
+  rxlen 0x45. The vendor setup (geni_se_select_gpi_mode, IRQ masks, scratch
+  register, QOS, ring lengths, event doorbell) was matched register by
+  register against MiCode peridot-u-oss msm_gpi; nothing else differs.
+- 0106 accepts every TCE code of a transfer event like the vendor does,
+  counts the event classes a transfer produced, and adds the optional
+  variants (peridotgpimode): 1 = vendor LOCK/UNLOCK TREs, 2 = TX doorbell
+  before RX, 4 = relaxed codes, 8 = STOP/START per transfer. On timeout it
+  prints the GPI error log, the GPI debug PC and the channel contexts.
+  0107 writes the optional screen capture in numbered chunks of 120 hex
+  characters: the console truncates a single line at 255 characters, so
+  the long rows of the 0104 capture were lost (133 of 356 rows survived).
+  tools/peridot-frame-from-log.py now joins the chunks and still accepts
+  the old single-line rows.
+- Next: CI0106/0107 (39786599717, commit67e0d7d), then several cycles with
+  the same kernel and different peridotgpimode values (0 baseline,
+  4 relaxed, 6 relaxed+TX doorbell first, 15 all variants). A passing
+  69-byte loopback unlocks the real Goodix reads and then touch.
+
 - Further read-only recovery evidence: DMAengine summary shows a90000.spi on
   dma1chan0/1; gpi_dmaa00000_gpii0 IPC logs show routine successful Goodix
   health reads and RX/TX completions. Live DT dmas args4=2 decodes through
