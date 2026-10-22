@@ -25,10 +25,19 @@
   research/clipkobjs (0 of 1 files failed).
 - Patch applies in CI order on the 0114 buildtree and its reverse dry-run
   returns the exact 0114 state.
-- NEXT: commit+push expect xnu.yml CI; when the artifact lands, build
-  shim-boot-0115-ahb.img with peridotgpu=3 sweetdiagreset=sweetgpuhold and boot
-  timing; read back AHB/CX/GX values against the 0112 inventory. Manual phone
-  return to fastboot is required first; preserve the recovery BCB.
+- BUILD DONE: commit 1dcdb86 pushed; CI39868400564 SUCCESS (7m45s);
+  artifact SHA256SUMS verified (kernel.development.sweet
+  29c5475d33478137b2341003db4f44bb33426a33b493c69318a76844134639d2).
+  shim-boot-0115-ahb.img built with mkpayload (peridot-0092-mac.adt) and
+  build.sh: cmdline identical to 0114-cx plus peridotgpu=3
+  sweetgpuhold=100; image SHA256
+  07dddc8758729818519f54460c828cf15c64d3a33301c538c526b5232b545465;
+  manifest and sums under research/diagnostics-20261022/images-0115/.
+- NEXT hardware step: the user returns the phone to fastboot manually;
+  then fastboot boot the 0115 image, pull the console to
+  cycle-0115-ahb/, read CX/GX and the AHB gate values, and compare with
+  the 0112 inventory. Decide the next bounded stage afterwards (hub-aon
+  and hub-cx gates, or SMMU geometry observation).
 - Phone state: ordinary0113 temporary boot image still displayed (no ADB or
   fastboot enumeration is expected for XNU with USB disabled). Do not repeat
   any boot attempt until the user confirms the fastboot screen.

@@ -122,6 +122,14 @@ as a shortcut.
    **0114 / `peridotgpu=2`: hardware PASS** for a bounded idle-CX power pulse,
    restoring its original collapsed state. GX unchanged; no firmware, clocks,
    rail votes, core/GMU/SMMU access. Configured diagnostic reset required.
+   **0115 / `peridotgpu=3` (built, hardware pending):** holds that
+   previously collapsed CX domain live and toggles ONLY the configuration
+   AHB gate at GPUCC0x90c8 (BRANCH_HALT_DELAY class, so the enable bit
+   readback is the check and the status bit is ignored). sweetgpuhold
+   (25..1000, default100, stage cap200 ms) bounds the window; the gate is
+   restored and CX collapsed again with the same bounded refusal, restore
+   and ownership rules as 0114. Readbacks go to the console for contrast
+   with the 0112 inventory. No GMU, GPU core, SMMU, RCG or vote access.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU
