@@ -5,7 +5,7 @@
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
 **Latest continuation (Codex after latest OpenCode, 2026-10-22 15:10 UTC):
-repo moved to /home/admin/xlamiOS, origin Olegu621/xlamiOS. Phone is in root
+repo moved to /home/admin/xlamiOS, origin Olegu621/xlamiOS-xnu-kernel (GitHub rename verified). Phone is in root
 recovery after0108. Bit-banged SPI6 + RPMh power works: actual Goodix9916R
 BERLIN version and197-byte IC_INFO checksums pass on hardware. CI0110
 39798201516 succeeded (10ed423), but poller NOT booted yet. Review found
@@ -30,9 +30,18 @@ This paragraph overrides stale status and old proposed next steps below.**
   reference after successful start. No firmware/config uploads.
 - Local SPI+HID cross-compile passes. Actual parser/ACK ASan/UBSan checks
   pass, including exact6-byte status write,0..10 contacts and bad checksums.
-- CI0110 kernel SHA256SUMS verified. Download CI tree and prove0111 bases,
-  then commit/build0111 and temporary spi7/180s/snapshot with automatic
-  recovery capture. Physical finger/UI response still unproven.
+- CI0110 kernel SHA256SUMS verified. Exact CI0108 source +0109+0110
+  reconstructed and matched baseline;0111 applies to both files exactly.
+  Commit2d8ecb4, CI0111 **39801868447** is building. Next temporary
+  spi7/180s/snapshot automatic capture. Physical finger/UI response unproven.
+- Re-read all user links from OpenCode; refreshed HackiOS/sibling peridot
+  refs and inspected NativeHidInput, NativeMobileDisplay, NativeAdreno and
+  additional ios-topaz/Snapintosh sources. docs/PORTING-REFERENCES.md records
+  exact files/revisions, relevant fixes and hardware/ABI differences.
+- README corrected: SM8635, confirmed lock screen vs untested UI claims,
+  disk-backed UFS root, temporary kernel vs actual root/log writes, single
+  tested CPU and diagnostic-only reset timer. Origin now canonical
+  Olegu621/xlamiOS-xnu-kernel; local project path remains /home/admin/xlamiOS.
 
 ### Corrected touchscreen facts (Codex, confirmed in live recovery)
 
