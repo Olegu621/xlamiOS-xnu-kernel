@@ -4,6 +4,41 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### LATEST0113 hardware session (2026-10-22 ~16:06UTC)
+
+- User returned phone to fastboot. Installed recovery reached with
+  `fastboot reboot recovery` after clearing slot-a unbootable flag via
+  `fastboot --set-active=a` (same active slot). NO partition flashed.
+  Recovery-only v4 image kernel_size0 cannot fastboot boot: Bad Buffer Size;
+  do NOT repeat temporary recovery.img recipe in older handoffs.
+-0113 diagnostic temporary boot accepted, returned root recovery and log
+  captured: research/diagnostics-20261022/cycle-0113-scale-gpu/console.txt.
+  FB full-panel scale + HID full-panel inverse scale registered; offsets0,0.
+  User physically exercised it and confirmed "норм все".148 touch reports,
+  drops0; finger0:8 matched down/up pairs, finger1:3; no orphan/stuck contact.
+  No panic in saved log. Timed-reset final marker absent; exact recovery
+  reset trigger is not established by this log. Screenshot80s is power0
+  black again (asleep); source/hardware mapping and user confirmation are
+  evidence, NOT a visual screenshot proof.
+- GPU inventory0112 HARDWARE PASS within0113: GCC configAHB1; CX/GX GDSCR
+  both0x22f801; all read-only GPUCC records complete and iOS continued.
+  NO core/GMU/SMMU access or writes. GPU acceleration still unimplemented.
+- Read-only vendor_a mount yielded gen71100_gmu.bin80680B and sqe66036B;
+  SHA hashes, exact15-block GMU audit and primary source contract recorded
+  in docs/PERIDOT-GPU.md. ZAP still missing (not found under vendor or
+  modem_a/modemfirmware_a images). All temporary firmware mounts unmounted.
+- Ordinary shim/out/shim-boot-0113-normal.img now temporary booted to leave
+  phone in iOS. SAME CI kernel, peridotspi7; no GPU probe, diagnostic reset,
+  screenshot or synthetic-key timer. fastboot result normal-0113/.
+  Full-panel scaling default ON for1220x2712; sweetfb_scale0 fallback.
+- Scale-only diagnostic image also prepared but NOT BOOTED:
+  shim/out/shim-boot-0113-scale-only.img, spi7/diag90/shot45/noGPUprobe,
+  SHAc1d6523652d6fe4978f6d2e7257ba88544eb1e9e4bc6a188596d52cbda1284ee.
+  This was precaution while waiting for recovery; combined probe succeeded.
+- Next GPU work: locate ZAP image/authentication path; implement matching
+  CX/clocks/GMU GPU-SMMU contexts from exact SM8635 data, then bounded HFI
+  and private fence proof before Mesa/EAGL integration. No blind A740 tables.
+
 **Latest continuation (Codex, 2026-10-22 15:23 UTC):
 Native Goodix TOUCH HARDWARE/HID PASS in0111. 844 validated reports, drops0,
 40 down/up pairs on finger0 and5 on finger1, no unpaired/stuck contacts.

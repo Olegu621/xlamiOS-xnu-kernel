@@ -37,7 +37,23 @@ name substitution in another driver's register sequence.
 Clock offsets come from Xiaomi's published
 [gpucc-cliffs.c](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/peridot-u-oss/drivers/clk/qcom/gpucc-cliffs.c)
 and [gcc-cliffs.c](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/peridot-u-oss/drivers/clk/qcom/gcc-cliffs.c).
-Firmware bytes have not yet been collected or authenticated for this work.
+Matching GMU/SQE bytes were collected read-only from the phone's vendor_a
+filesystem during0113 preparation. They have not been executed by this port:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| gen71100_gmu.bin |80680|435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864|
+| gen71100_sqe.fw |66036|b6df660d109504dbea5a266910b037a33d893a11c6de52f524a5fd112008c401|
+
+The GMU image parses exactly to EOF as15 KGSL block records:11 metadata
+preallocations followed by4 payloads. Persistent preallocations reserve4KiB
+at0x60000000 and0x60001000; cache reservations include0x4000/0x1381c,
+0x100000/0x1aa78,0x200000/0x12c80,0x300000/0x24bf8. Every requested range
+and payload fits the source-defined GMU VMA. This verifies format/bounds,
+not authenticity or successful startup. Audit JSON and binaries stay under
+ignored research/gpu-recovery-0113; ZAP bytes remain to be located.
+Recovery's actual SMMU boot log reports SMMUv2,24 stream groups,22 context
+banks, coherent walks,48-bit VA to36-bit IPA and zero preserved boot mappings.
 
 The manufacturer's [SM8635 KGSL profile](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8635/blob/1a24977367ee2d77998fc6957eb61a99331a347d/vendor/qcom/opensource/graphics-kernel/adreno-gpulist.h#L2459)
 independently matches the actual module's gen7_11_0 firmware names and hardware
@@ -84,5 +100,11 @@ as a shortcut.
    IOSurface buffers and CoreAnimation. Validate pixel output, completion and
    recovery before enabling it for ordinary sessions.
 
-Current hardware acceptance: **0112 is not booted yet; GPU acceleration is not
-implemented.** The default iOS boot remains on the tested CPU renderer.
+Hardware acceptance: **0112's inventory completed during the0113 iOS boot.**
+GCC configuration AHB was0x1; CX/GX GDSCR both0x22f801, CX HW0x2800010a,
+GX domain0x3c0001. GPUCC AHB0, CX GMU0x80002001, CXO0x80000001,
+hub AON1, hub CX0x80000001, memnoc/SMMU vote/CX FF0x80000000; GMU
+RCG0x80000000/0, hub0/0, XO0/0. These are observed handoff values,
+not an initialized submission path. iOS and actual touch input continued
+after the probe. **GPU acceleration remains unimplemented.** Ordinary0113
+uses the tested CPU renderer/full-panel scaler with the GPU probe disabled.
