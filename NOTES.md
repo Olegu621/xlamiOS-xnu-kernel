@@ -4,6 +4,24 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### GPU continuation0114 (prepared, not booted)
+
+- peridotgpu2 adds a bounded CX power pulse after the proven read-only
+  handoff. Requires configured sweetdiagreset30..3600. No clock/rail votes,
+  GPU/GMU/SMMU mapping, firmware upload, SCM or GX writes.
+- Refuses already-on/unreadable/HW-controlled/override CX and noncollapsed
+  GX. Changes ONLY CX SW_COLLAPSE, polls DT-specified CX HW status90a0,
+  bounded50ms each way, restores collapse on power-on timeout. Unexpected
+  ownership change is left for reset rather than forced off.
+- Actual helper ASan/UBSan tests pass: on/off, no-write refusal, timeout
+  rollback, ownership changes, bounded polling, preservation of other bits.
+  Kernel cross-compile passes. Patch reverse dry-run passes. Hardware pending.
+- User asks broader internet research and maximal reuse. Search found NEW
+  joranv1/ios-sailfish (same16.7/CoreAnimation Mesa path), investigating actual
+  source rather than assuming a7xx support from older Adreno530 hardware.
+  Primary Linux Nord series mentions A735 but explicitly defers support;
+  this does not supply a ready SM8635 driver. Preserve ordinary0113 phone.
+
 ### LATEST0113 hardware session (2026-10-22 ~16:06UTC)
 
 - User returned phone to fastboot. Installed recovery reached with

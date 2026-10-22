@@ -1,0 +1,165 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -1,14 +1,16 @@
+ /* Peridot Adreno735 handoff inventory. Clocks from MiCode peridot-u-oss
+  * gcc-cliffs.c/gpucc-cliffs.c; power-domain offsets from the live DT reg
+  * properties (some node unit addresses do NOT equal their reg addresses).
+- * Explicit peridotgpu=1 only, after the persistent console starts.
+- * No register writes, firmware upload, GPU/GMU/SMMU mapping or submissions.
++ * peridotgpu=1 reads handoff only. Mode2 also pulses an idle CX domain,
++ * with a diagnostic reset timer required. No firmware/GPU/GMU/SMMU access.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
++#include <kern/clock.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include "sweet_gpu_power_peridot.h"
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_peridot_gpu_probe(void);
+ 
+@@ -20,13 +22,27 @@
+ 	return value;
+ }
+ 
++static uint32_t
++pgpu_power_read(void *context, unsigned off)
++{
++	return pgpu_read((vm_offset_t)context, off);
++}
++
++static void
++pgpu_power_write(void *context, unsigned off, uint32_t value)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)((vm_offset_t)context + off) = value;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
+ void
+ sweet_peridot_gpu_probe(void)
+ {
+ 	static bool attempted;
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if (mode != 1 || attempted) {
++	if ((mode != 1 && mode != 2) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -66,5 +82,24 @@
+ 	    pgpu_read(cc, 0x919c), pgpu_read(cc, 0x91a0),
+ 	    pgpu_read(cc, 0x9010), pgpu_read(cc, 0x9014));
+ 	printf("PERIDOT GPU: handoff captured; no GPU/GMU/SMMU access or register writes\n");
++	if (mode == 2) {
++		uint32_t reset = 0;
++		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
++		if (reset < 30 || reset > 3600) {
++			printf("PERIDOT GPU: CX power test refused: diagnostic reset timer required\n");
++			return;
++		}
++		printf("PERIDOT GPU: CX power test: idle domain only, SW_COLLAPSE only, bounded50ms\n");
++		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		enum pgpu_power_result result = pgpu_cx_power_cycle(&io);
++		static const char *const names[] = {
++			"REFUSED live/unknown/hardware-controlled domain", "PASS on then restored off",
++			"FAIL power-on timeout; collapse restored", "FAIL power-off/restore timeout",
++			"FAIL ownership changed; leave for diagnostic reset"
++		};
++		printf("PERIDOT GPU: CX power test %s; CX=%#x hw=%#x GX=%#x\n",
++		    names[result], pgpu_read(cc, PGPU_CX_GDSCR),
++		    pgpu_read(cc, PGPU_CX_HW), pgpu_read(cc, PGPU_GX_GDSCR));
++	}
+ }
+ #endif
+--- /dev/null
++++ b/bsd/dev/sweet_gpu_power_peridot.h
+@@ -0,0 +1,87 @@
++/* Peridot CX power diagnostic. GPUCC only; no GPU/GMU/SMMU register access. */
++#ifndef SWEET_GPU_POWER_PERIDOT_H
++#define SWEET_GPU_POWER_PERIDOT_H
++#include <stdint.h>
++#include <stdbool.h>
++
++#define PGPU_CX_GDSCR 0x908cu
++#define PGPU_CX_HW 0x90a0u
++#define PGPU_GX_GDSCR 0x9034u
++#define PGPU_ON (1u << 31)
++#define PGPU_COLLAPSE 1u
++#define PGPU_HW_CONTROL 2u
++#define PGPU_OVERRIDE 4u
++
++struct pgpu_power_io {
++	void *context;
++	uint32_t (*read)(void *, unsigned);
++	void (*write)(void *, unsigned, uint32_t);
++	void (*delay_us)(unsigned);
++};
++
++enum pgpu_power_result {
++	PGPU_POWER_REFUSED = 0,
++	PGPU_POWER_PASS,
++	PGPU_POWER_ON_TIMEOUT,
++	PGPU_POWER_OFF_TIMEOUT,
++	PGPU_POWER_OWNERSHIP_LOST
++};
++
++static inline bool
++pgpu_collapsed(uint32_t value)
++{
++	return value != UINT32_MAX &&
++	    (value & (PGPU_ON | PGPU_COLLAPSE | PGPU_HW_CONTROL | PGPU_OVERRIDE)) == PGPU_COLLAPSE;
++}
++
++/* Live DT specifies CX HW status at0x90a0. Allow at least8 XO cycles after
++ * changing collapse before trusting that status (qcom gdsc.c). Bounded50ms.
++ * Do not infer status from the GPUCC AHB branch, whose halt check is DELAY.
++ */
++static inline bool
++pgpu_power_wait(const struct pgpu_power_io *io, bool on)
++{
++	for (unsigned i = 0; i < 500; ++i) {
++		io->delay_us(100);
++		uint32_t hw = io->read(io->context, PGPU_CX_HW);
++		if (hw == UINT32_MAX) {
++			return false;
++		}
++		if (((hw & PGPU_ON) != 0) == on) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/* Own only a previously collapsed CX domain, while GX stays collapsed.
++ * Only SW_COLLAPSE changes. No stale-context reset, rail/clock vote or force
++ * power-off of an already live domain. Restore collapse even on on-timeout.
++ * If ownership changes unexpectedly, leave it alone for a device reset.
++ */
++static inline enum pgpu_power_result
++pgpu_cx_power_cycle(const struct pgpu_power_io *io)
++{
++	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
++	uint32_t hw = io->read(io->context, PGPU_CX_HW);
++	uint32_t gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (!pgpu_collapsed(cx) || !pgpu_collapsed(gx) ||
++	    hw == UINT32_MAX || (hw & PGPU_ON)) {
++		return PGPU_POWER_REFUSED;
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx & ~PGPU_COLLAPSE);
++	bool powered = pgpu_power_wait(io, true);
++	cx = io->read(io->context, PGPU_CX_GDSCR);
++	gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (cx == UINT32_MAX || (cx & (PGPU_HW_CONTROL | PGPU_OVERRIDE)) ||
++	    !pgpu_collapsed(gx)) {
++		return PGPU_POWER_OWNERSHIP_LOST;
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx | PGPU_COLLAPSE);
++	if (!pgpu_power_wait(io, false) ||
++	    !pgpu_collapsed(io->read(io->context, PGPU_CX_GDSCR))) {
++		return PGPU_POWER_OFF_TIMEOUT;
++	}
++	return powered ? PGPU_POWER_PASS : PGPU_POWER_ON_TIMEOUT;
++}
++#endif
