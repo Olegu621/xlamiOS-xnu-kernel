@@ -1,0 +1,101 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -55,6 +55,7 @@
+ extern void sweet_keys_init(void);
+ extern void sweet_peridot_keys_init(void);
+ extern void sweet_peridot_spi_init(void);
++extern void sweet_peridot_gpu_probe(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
+ 
+@@ -1113,6 +1114,7 @@
+ 		sweet_touch_init();
+ 		sweet_usb_probe();
+ 	} else {
++		sweet_peridot_gpu_probe();
+ 		sweet_peridot_keys_init();
+ 		sweet_peridot_spi_init();
+ 		printf("SWEET PERIPHERALS: SM8635; SM7150 touch/USB probes withheld\n");
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -114,6 +114,7 @@
+ bsd/dev/sweet_spi_peridot.c		standard
+ bsd/dev/sweet_gpi_peridot.c		standard
+ bsd/dev/sweet_rpmh_peridot.c		standard
++bsd/dev/sweet_gpu_peridot.c		standard
+ bsd/dev/sweet_usb.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+--- /dev/null
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -0,0 +1,70 @@
++/* Peridot Adreno735 handoff inventory. Clocks from MiCode peridot-u-oss
++ * gcc-cliffs.c/gpucc-cliffs.c; power-domain offsets from the live DT reg
++ * properties (some node unit addresses do NOT equal their reg addresses).
++ * Explicit peridotgpu=1 only, after the persistent console starts.
++ * No register writes, firmware upload, GPU/GMU/SMMU mapping or submissions.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_peridot_gpu_probe(void);
++
++static uint32_t
++pgpu_read(vm_offset_t base, unsigned off)
++{
++	uint32_t value = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return value;
++}
++
++void
++sweet_peridot_gpu_probe(void)
++{
++	static bool attempted;
++	uint32_t mode = 0;
++	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
++	if (mode != 1 || attempted) {
++		return;
++	}
++	attempted = true;
++	printf("PERIDOT GPU: read-only clock handoff; DT expects Adreno735 id=0x43030b00 gen7-11-0\n");
++	vm_offset_t gcc = ml_io_map(0x100000, 0x80000);
++	if (!gcc) {
++		printf("PERIDOT GPU: GCC map failed\n");
++		return;
++	}
++	uint32_t cfg = pgpu_read(gcc, 0x71004);
++	printf("PERIDOT GPU: GCC cfg-ahb=%#x memnoc=%#x snoc-dvm=%#x pll-vote=%#x\n",
++	    cfg, pgpu_read(gcc, 0x71010), pgpu_read(gcc, 0x71018),
++	    pgpu_read(gcc, 0x52000));
++	/* Configuration bus must already be enabled and not halted. Do not
++	 * enable it just to discover what the boot loader left behind. */
++	if (cfg == 0xffffffffu || !(cfg & 1) || (cfg & (1u << 31))) {
++		printf("PERIDOT GPU: configuration AHB off/unreadable; GPUCC reads withheld\n");
++		return;
++	}
++	vm_offset_t cc = ml_io_map(0x3d90000, 0xa000);
++	if (!cc) {
++		printf("PERIDOT GPU: GPUCC map failed\n");
++		return;
++	}
++	printf("PERIDOT GPU: reading GPUCC power/clock controls only\n");
++	uint32_t cx = pgpu_read(cc, 0x908c), gx = pgpu_read(cc, 0x9034);
++	printf("PERIDOT GPU: CX-gdscr=%#x GX-gdscr=%#x CX-hw=%#x GX-domain=%#x\n",
++	    cx, gx, pgpu_read(cc, 0x90a0), pgpu_read(cc, 0x9504));
++	printf("PERIDOT GPU: CC ahb=%#x cx-gmu=%#x cxo=%#x demet=%#x cxo-aon=%#x\n",
++	    pgpu_read(cc, 0x90c8), pgpu_read(cc, 0x90e4), pgpu_read(cc, 0x90f0),
++	    pgpu_read(cc, 0x900c), pgpu_read(cc, 0x9004));
++	printf("PERIDOT GPU: CC hub-aon=%#x hub-cx=%#x memnoc=%#x smmu-vote=%#x cx-ff=%#x\n",
++	    pgpu_read(cc, 0x9198), pgpu_read(cc, 0x90f4), pgpu_read(cc, 0x90fc),
++	    pgpu_read(cc, 0x7000), pgpu_read(cc, 0x90f8));
++	printf("PERIDOT GPU: RCG gmu=%#x/%#x hub=%#x/%#x xo=%#x/%#x\n",
++	    pgpu_read(cc, 0x9168), pgpu_read(cc, 0x916c),
++	    pgpu_read(cc, 0x919c), pgpu_read(cc, 0x91a0),
++	    pgpu_read(cc, 0x9010), pgpu_read(cc, 0x9014));
++	printf("PERIDOT GPU: handoff captured; no GPU/GMU/SMMU access or register writes\n");
++}
++#endif

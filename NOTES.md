@@ -14,6 +14,27 @@ Repo /home/admin/xlamiOS; origin Olegu621/xlamiOS-xnu-kernel.
 All3 physical keys previously passed0097. Native GPI remains diagnostic.
 This paragraph overrides stale work plans and untested-touch claims below.**
 
+### GPU continuation and screen-size request (current work)
+
+- User requested GPU work, then full-panel resolution. Preserve both tasks.
+- Actual KGSL ELF profile gen7_11_0 resolves gen71100_gmu.bin,
+  gen71100_sqe.fw, gen71100_zap.mbn and adreno_gen7_hwsched_gpudev.
+  Host-only ELF relocation audit saved under research, no module executed.
+- DT GPU chip43030b00 is explicitly supported by Mesa FD735/a7xx_gen2/3CCU.
+  Driver/GMU power/translation still need native implementation. Preferred
+  frontend for existing iOS16: EAGL + Mesa/Freedreno, DRM-shaped IOKit bridge;
+  reuse NativeAdreno ownership/ring/HFI ideas with peridot hardware tables.
+-0112 adds explicit peridotgpu1 read-only GCC/GPUCC handoff after UFS logger,
+  gated by already-on configuration AHB. No GPU/GMU/SMMU registers, firmware,
+  SCM calls or writes. Local GPU+UFS cross-compile passes. Hardware pending.
+- Exact primary clocks from MiCode Xiaomi_Kernel_OpenSource/peridot-u-oss:
+  GPUCC offsets90c8/90e4/90f0/9198/7000, CX GDSCR908c/GX9034. Unit node
+  addresses in live DT are misleading; use reg properties, as in docs/PERIDOT-GPU.md.
+- Screen request: implement full-panel1220x2712 scaling of the working
+  logical1125x2436 scene, with the identical inverse map for finger input.
+  Returning userland to an unsupported panel mode would undo the0091
+  scaler/layout workaround. Keep a boot argument for the previous centered mode.
+
 ### 0111 hardware result and ordinary image
 
 - CI **39801868447 succeeded**, kernel commit2d8ecb4. SHA256SUMS verified.
