@@ -25,13 +25,17 @@
   research/clipkobjs (0 of 1 files failed).
 - Patch applies in CI order on the 0114 buildtree and its reverse dry-run
   returns the exact 0114 state.
-- BUILD DONE: commit 1dcdb86 pushed; CI39868400564 SUCCESS (7m45s);
-  artifact SHA256SUMS verified (kernel.development.sweet
-  29c5475d33478137b2341003db4f44bb33426a33b493c69318a76844134639d2).
-  shim-boot-0115-ahb.img built with mkpayload (peridot-0092-mac.adt) and
-  build.sh: cmdline identical to 0114-cx plus peridotgpu=3
-  sweetgpuhold=100; image SHA256
-  07dddc8758729818519f54460c828cf15c64d3a33301c538c526b5232b545465;
+- BUILD DONE (final): commits 1dcdb86+4322d98 pushed; CI39868400564 and
+  CI39871309593 SUCCESS; artifact SHA256SUMS verified (kernel
+  1415553cd7e3d81a547649b4c3b4fb09cf3081e4bcb80097f1f3796c679533cb).
+  4322d98 adds the live-window CC-report callback: while CX is live and the
+  gate is verified on, the probe prints CX/GX gdscr and the full GPUCC
+  branch and RCG set (same offsets as the mode1 handoff lines, prefixed
+  CC-live) so every status bit can be contrasted against the collapsed
+  handoff without a second boot.
+  shim-boot-0115-ahb.img (peridot-0092-mac.adt, cmdline identical to 0114-cx
+  plus peridotgpu=3 sweetgpuhold=100) SHA256
+  0059ed62a72be58dc5410b0e39dc8c79549d80d2d69d463176b36f3e78dac038;
   manifest and sums under research/diagnostics-20261022/images-0115/.
 - NEXT hardware step: the user returns the phone to fastboot manually;
   then fastboot boot the 0115 image, pull the console to
