@@ -6,6 +6,14 @@
 
 ### LATEST GPU0114 (2026-10-22 ~16:28UTC)
 
+- Session finish: ordinary0113 temporary boot accepted~16:28UTC, saved
+  normal-0113-after-gpu0114/fastboot-boot.txt. No timed reset/GPU probe in
+  this ordinary image. No ADB/fastboot enumeration at16:29, expected for
+  XNU with USB disabled (not independent visual UI proof). Released OUR
+  host sleep inhibitor1366484/child1366505. No cycle remains active.
+- Source/tools commit81b9b81 pushed. Phone still needs a manual fastboot
+  return for the next hardware image; offline GPU work can continue now.
+
 - CI39812182304 SUCCESS, commit47fdbcc; SHA256SUMS checked. Timed diagnostic
   peridotgpu2 BOOTED: cycle-0114-cx/console.txt has explicit CX power test
   PASS on then restored off; CX22f801/hw2800010a/GX22f801 restored exactly.
