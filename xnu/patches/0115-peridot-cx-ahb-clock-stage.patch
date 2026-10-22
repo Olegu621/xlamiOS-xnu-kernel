@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 01:46:32.838940375 +0300
-+++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 01:50:00.595190927 +0300
-@@ -84,4 +84,112 @@
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 02:21:01.769025449 +0300
+@@ -84,4 +84,117 @@
  	}
  	return powered ? PGPU_POWER_PASS : PGPU_POWER_ON_TIMEOUT;
  }
@@ -48,10 +48,12 @@
 +
 +/* hold_ms is capped at200 inside the stage so the whole sequence stays
 + * inside the diagnostic reset budget; the boot-arg validation belongs to
-+ * board support. */
++ * board support. observe, when non-NULL, runs while CX is live and the
++ * configuration AHB gate has just been verified on, before the hold. */
 +static inline enum pgpu_clock_result
 +pgpu_cx_hold_ahb_stage(const struct pgpu_power_io *io, unsigned hold_ms,
-+    uint32_t *cx_final, uint32_t *gx_final, uint32_t *ahb_final)
++    uint32_t *cx_final, uint32_t *gx_final, uint32_t *ahb_final,
++    void *observe_ctx, void (*observe)(void *observe_ctx))
 +{
 +	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
 +	uint32_t hw = io->read(io->context, PGPU_CX_HW);
@@ -78,6 +80,9 @@
 +		io->write(io->context, PGPU_AHB_CBCR, gate | PGPU_AHB_ON);
 +		bool settled = pgpu_ahb_gate_settled(io, true);
 +		if (settled) {
++			if (observe) {
++				observe(observe_ctx);
++			}
 +			unsigned hold = hold_ms > 200 ? 200 : hold_ms;
 +			for (unsigned i = 0; i < hold * 10; ++i) {
 +				io->delay_us(100);
@@ -114,7 +119,7 @@
 +}
  #endif
 --- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 01:46:32.394942249 +0300
-+++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 01:48:30.796488234 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 02:21:43.984921257 +0300
 @@ -1,8 +1,10 @@
  /* Peridot Adreno735 handoff inventory. Clocks from MiCode peridot-u-oss
   * gcc-cliffs.c/gpucc-cliffs.c; power-domain offsets from the live DT reg
@@ -128,7 +133,34 @@
   */
  #if defined(ARM64_BOARD_CONFIG_SWEET)
  #include <sys/param.h>
-@@ -42,7 +44,7 @@
+@@ -36,13 +38,34 @@
+ 	__asm__ volatile("dsb osh" ::: "memory");
+ }
+ 
++/* Same register set as the mode1 handoff inventory, printed while CX is
++ * live and the configuration AHB gate is on, so every status bit can be
++ * compared against the collapsed handoff values. */
++static void
++pgpu_cc_live_report(void *context)
++{
++	vm_offset_t cc = (vm_offset_t)context;
++	printf("PERIDOT GPU: CC-live CX-gdscr=%#x GX-gdscr=%#x CX-hw=%#x\n",
++	    pgpu_read(cc, 0x908c), pgpu_read(cc, 0x9034), pgpu_read(cc, 0x90a0));
++	printf("PERIDOT GPU: CC-live ahb=%#x cx-gmu=%#x cxo=%#x demet=%#x cxo-aon=%#x\n",
++	    pgpu_read(cc, 0x90c8), pgpu_read(cc, 0x90e4), pgpu_read(cc, 0x90f0),
++	    pgpu_read(cc, 0x900c), pgpu_read(cc, 0x9004));
++	printf("PERIDOT GPU: CC-live hub-aon=%#x hub-cx=%#x memnoc=%#x smmu-vote=%#x cx-ff=%#x\n",
++	    pgpu_read(cc, 0x9198), pgpu_read(cc, 0x90f4), pgpu_read(cc, 0x90fc),
++	    pgpu_read(cc, 0x7000), pgpu_read(cc, 0x90f8));
++	printf("PERIDOT GPU: CC-live RCG gmu=%#x/%#x hub=%#x/%#x xo=%#x/%#x\n",
++	    pgpu_read(cc, 0x9168), pgpu_read(cc, 0x916c),
++	    pgpu_read(cc, 0x919c), pgpu_read(cc, 0x91a0),
++	    pgpu_read(cc, 0x9010), pgpu_read(cc, 0x9014));
++}
++
+ void
+ sweet_peridot_gpu_probe(void)
+ {
  	static bool attempted;
  	uint32_t mode = 0;
  	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
@@ -137,7 +169,7 @@
  		return;
  	}
  	attempted = true;
-@@ -101,5 +103,36 @@
+@@ -101,5 +124,36 @@
  		    names[result], pgpu_read(cc, PGPU_CX_GDSCR),
  		    pgpu_read(cc, PGPU_CX_HW), pgpu_read(cc, PGPU_GX_GDSCR));
  	}
@@ -158,7 +190,7 @@
 +		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
 +		uint32_t cx_out = 0, gx_out = 0, ahb_out = 0;
 +		enum pgpu_clock_result result = pgpu_cx_hold_ahb_stage(&io, hold,
-+		    &cx_out, &gx_out, &ahb_out);
++		    &cx_out, &gx_out, &ahb_out, (void *)cc, pgpu_cc_live_report);
 +		static const char *const names[] = {
 +			"REFUSED live/unknown domain or unreadable/busy gate",
 +			"PASS gate held then restored and CX restored",
