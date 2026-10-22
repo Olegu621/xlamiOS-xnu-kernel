@@ -44,6 +44,7 @@ filesystem during0113 preparation. They have not been executed by this port:
 | --- | ---: | --- |
 | gen71100_gmu.bin |80680|435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864|
 | gen71100_sqe.fw |66036|b6df660d109504dbea5a266910b037a33d893a11c6de52f524a5fd112008c401|
+| gen71100_zap.mbn (odm_a) |12088|dbfd89112520d774781ecf511ce74c31e6a5a95a8002cafd2a51f0ef1e368f45|
 
 The GMU image parses exactly to EOF as15 KGSL block records:11 metadata
 preallocations followed by4 payloads. Persistent preallocations reserve4KiB
@@ -51,7 +52,9 @@ at0x60000000 and0x60001000; cache reservations include0x4000/0x1381c,
 0x100000/0x1aa78,0x200000/0x12c80,0x300000/0x24bf8. Every requested range
 and payload fits the source-defined GMU VMA. This verifies format/bounds,
 not authenticity or successful startup. Audit JSON and binaries stay under
-ignored research/gpu-recovery-0113; ZAP bytes remain to be located.
+ignored research/gpu-recovery-0113. The existing UniXNU parser, now under
+vendor/AdrenoFirmware, independently gives the same15 blocks; host tool
+tools/peridot-gmu-plan.c also checks preallocation bounds/order.
 Recovery's actual SMMU boot log reports SMMUv2,24 stream groups,22 context
 banks, coherent walks,48-bit VA to36-bit IPA and zero preserved boot mappings.
 
@@ -73,6 +76,32 @@ GMU mappings. A generic driver's fixed debug/HFI windows are insufficient.
 
 ## Implementation route
 
+Broader source search found a second ready iOS16 frontend:
+[ios-sailfish sweetgl](https://github.com/joranv1/ios-sailfish/tree/d7a74344828c87d37c64f87f237525cb65b7e5f5/tools/sweetgl).
+It targets iOS16.7 and already contains EAGL dispatch, IOSurface imports and
+CA shader workarounds. Hardware is A530, so only the frontend contract is
+relevant. Its sysmem rendering avoids tiled stores beyond unpadded IOSurfaces;
+nofp16 avoids CA shader precision problems. Reuse these findings rather than
+recreating the whole renderer. HackiOS's pinned Mesa25.0.7 already includes
+the exact FD735 ID, properties and compiler backend. No Metal implementation
+is needed for the first accelerated CA interface.
+
+Also inspected the actual [NativeMetal source](https://github.com/UniXNU/NativeMetal)
+and [sheng board](https://github.com/UniXNU/UniXNU-sheng/tree/2b7a5815110bf75713eb596612b0b33231b181f8).
+This is a working iPadOS17.7.11 frontend, not merely a macOS concept. It has
+an existing Turnip Darwin KMD in UniXNU/patches/mesa/turnip-darwin-kmd.patch,
+including native BO imports and fences; future Metal work can reuse it.
+It is not the Gallium/msm ABI used by the iOS16 sweetgl frontend. Choose a
+frontend deliberately rather than porting both ABIs at once. Existing EAGL
+integration for16.7 remains the smaller initial compositor change.
+
+NativeAdreno's GMU platform depends on ShengGmu.h/c from the board repository,
+not only the driver and AdrenoFirmware kit. That code checks sheng's exact
+firmware hash/size/chip ID and generated RSC setup, so importing only
+NativeAdreno does not supply a peridot GMU startup implementation. Its state
+machine is reusable; firmware preallocations, windows, power/clock offsets,
+SCM setup, RSC data and HFI inputs need measured peridot equivalents.
+
 For the existing iOS16 userland, the practical frontend is the EAGL/OpenGL ES
 path demonstrated in [HackiOS](https://github.com/oosexgang/hackios-xnu-userland)
 and ios-topaz: CoreAnimation -> EAGL adapter -> Mesa/Freedreno -> a DRM-shaped
@@ -90,6 +119,9 @@ as a shortcut.
 1. **0112 / `peridotgpu=1`:** read GCC/GPUCC clock and power handoff only.
    Refuse GPUCC reads if the configuration AHB is off or unreadable. No GPU
    core, GMU, SMMU, firmware, SCM or register-write operation in this stage.
+   **0114 / `peridotgpu=2`: hardware PASS** for a bounded idle-CX power pulse,
+   restoring its original collapsed state. GX unchanged; no firmware, clocks,
+   rail votes, core/GMU/SMMU access. Configured diagnostic reset required.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU
@@ -99,6 +131,26 @@ as a shortcut.
 5. Render an offscreen pattern through the FD735 Mesa path, then connect
    IOSurface buffers and CoreAnimation. Validate pixel output, completion and
    recovery before enabling it for ordinary sessions.
+
+### ZAP authentication contract (offline, not executed)
+
+The peridot Android device's proprietary-file list exposed the missing path:
+odm/firmware/gen71100_zap.mbn. Root recovery mounted odm_a read-only, pulled
+the file, then unmounted it. The live DT reserves0x9899a000/0x2000 for GPU
+microcode. The MBN is a self-contained ELF32 with three program headers.
+Only its1012-byte load segment belongs in that carveout, at its start;
+the whole12088-byte file would exceed the reserved region.
+
+[KGSL kgsl_util.c](https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8635/blob/1a24977367ee2d77998fc6957eb61a99331a347d/vendor/qcom/opensource/graphics-kernel/kgsl_util.c#L108)
+uses PAS13 and Qualcomm's MDT loader, then PAS auth-and-reset. The
+[matching MDT loader](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/peridot-u-oss/drivers/soc/qcom/mdt_loader.c)
+packs the148-byte header with the3896-byte signature/hash segment into
+separate contiguous metadata,4044 bytes total; the file padding is omitted.
+Metadata must have coherent/noncached physical storage with4KiB alignment
+while SCM authenticates it. Relocatable segment flags require PAS mem-setup
+for4096 bytes at the reserved base, then segment placement and auth-and-reset.
+tools/peridot-zap-plan.py validates file spans, metadata, relocation and the
+carveout offline. Authentication is still untested; no SCM call was issued.
 
 Hardware acceptance: **0112's inventory completed during the0113 iOS boot.**
 GCC configuration AHB was0x1; CX/GX GDSCR both0x22f801, CX HW0x2800010a,

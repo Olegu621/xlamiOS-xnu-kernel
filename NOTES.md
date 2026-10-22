@@ -4,7 +4,44 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
-### GPU continuation0114 (prepared, not booted)
+### LATEST GPU0114 (2026-10-22 ~16:28UTC)
+
+- CI39812182304 SUCCESS, commit47fdbcc; SHA256SUMS checked. Timed diagnostic
+  peridotgpu2 BOOTED: cycle-0114-cx/console.txt has explicit CX power test
+  PASS on then restored off; CX22f801/hw2800010a/GX22f801 restored exactly.
+  Goodix probe/poller and iOS continued; no panic in saved log. Final
+  timed60s reset marker IS present and recovery log pull succeeded.
+  Image shim/out/shim-boot-0114-cx.img SHA
+  00a0fa3f347393a984bf82157cdc5fd31b0339291d95ab926851538a3f69e839.
+  Kernel20953e7a388ff8b775ce8bbf3249afdf7e5602cb0bca042f7857efd4c22f60f9.
+- Broad internet/source search found joranv1/ios-sailfish d7a74344828c:
+  actual iOS16.7 sweetgl EAGL/Mesa interface, GLSL/IOSurface fixes and
+  generation-matched dispatch. Hardware530 differs; no register import.
+  Mesa25.0.7 already includes exact FD735/chip43030b00/3CCU. Reuse renderer.
+- NEW ZAP location from Android peridot proprietary-files.txt:
+  odm/firmware/gen71100_zap.mbn. Pulled12088B from phone's odm_a READ-ONLY,
+  then unmounted. SHA dbfd89112520d774781ecf511ce74c31e6a5a95a8002cafd2a51f0ef1e368f45.
+  All3 matching firmware images now collected (ignored gpu-recovery-0113).
+  tools/peridot-zap-plan.py checks ELF/MDT layout: PAS13, metadata4044B,
+  reloc span4KiB, load payload1012B at9899a000 within8192B DT carveout.
+  DO NOT copy whole12KiB file there! No SCM/authentication executed.
+- Actually reused unmodified UniXNU/AdrenoFirmware40fdb8ea8760 parser,
+  vendored under vendor/AdrenoFirmware with LICENSE/pin. Host GMU tool
+  agrees with independent audit (15records/11prealloc/4payload); ASan/UBSan
+  +5 damaged images pass. ZAP real-image +7 damaged-image/small-carveout checks pass.
+- NEW sources foreign-nativemetal + foreign-unixnu-sheng2b7a5815110b:
+  NativeMetal targets iPadOS17.7.11 and has Turnip Darwin KMD already.
+  It is a genuine mobile frontend option, not only macOS. iOS16 EAGL
+  remains smaller initial frontend; do not implement both ABIs at once.
+  NativeAdreno GMU depends on board-specific ShengGmu code/generated
+  tables/hash/firmware/window constants. Reuse state machine with peridot
+  data rather than assuming driver repo is self-contained.
+- NEXT hardware stage: peridot CX/clocks (hub200MHz/GMU220 or550MHz fromDT),
+  SMMU/GMU cold-reset observation, private native4K GMU mappings, matching
+  RSC/SCM/HFI. Then CP private memory write+fence, then ready Mesa frontend.
+  GPU rendering still NOT implemented;0114 only validates CX ownership/power.
+
+### GPU0114 preparation details (now hardware-verified above)
 
 - peridotgpu2 adds a bounded CX power pulse after the proven read-only
   handoff. Requires configured sweetdiagreset30..3600. No clock/rail votes,
@@ -57,7 +94,7 @@
   CX/clocks/GMU GPU-SMMU contexts from exact SM8635 data, then bounded HFI
   and private fence proof before Mesa/EAGL integration. No blind A740 tables.
 
-**Latest continuation (Codex, 2026-10-22 15:23 UTC):
+**Historical0111 continuation (Codex, 2026-10-22 15:23 UTC):
 Native Goodix TOUCH HARDWARE/HID PASS in0111. 844 validated reports, drops0,
 40 down/up pairs on finger0 and5 on finger1, no unpaired/stuck contacts.
 Peridot geometry1220x2712/logical1125x2436 offsets-47,-138 is logged.
@@ -65,9 +102,9 @@ No panic/read/ACK/poller failure appears in the saved log. Device returned
 recovery; normal0111 (same kernel, spi7, NO timed reset) temporary boot accepted.
 Repo /home/admin/xlamiOS; origin Olegu621/xlamiOS-xnu-kernel.
 All3 physical keys previously passed0097. Native GPI remains diagnostic.
-This paragraph overrides stale work plans and untested-touch claims below.**
+This records the0111 milestone; the newer0113/0114 results above take precedence.**
 
-### 0112 GPU inventory +0113 full-panel presentation — prepared
+### 0112/0113 preparation history (superseded by hardware results above)
 
 - Commit219034b; CI39808131342 SUCCESS. Artifact SHA256SUMS verified;
   kernel SHA faba6da0f8e809d4002cf30707d671182ba3165f6f4a48226ad34844b4fac3ce.
