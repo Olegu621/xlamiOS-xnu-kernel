@@ -26,7 +26,7 @@ The boot and recovery partitions are preserved during these sessions.
 | iOS userland | Real iPhone X 16.7 root filesystem and shared cache; launchd and the system daemons run |
 | Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`); CoreAnimation renders in software; frames are copied into the bootloader's framebuffer. Presented to iOS as an iPhone X panel (1125×2436) |
 | GUI | backboardd and SpringBoard run; the lock screen has been confirmed on the phone |
-| Touch | Goodix BerlinD (9916R) version and IC_INFO verified over GPIO SPI; HID poller prepared, physical touch verification pending |
+| Touch | Goodix BerlinD (9916R) over GPIO SPI; 844 valid reports and 45 matched contact down/up pairs verified through HID |
 | Buttons | Power, volume up/down (PMIC over SPMI) as HID consumer keys |
 | Panel rails | AVDD and IOVDD voted through RPMh, reset sequenced on the panel's GPIO |
 | Diagnostics | Every boot leaves a persistent console log on the device; the screen can be captured as a PNG from the kernel |
@@ -36,7 +36,7 @@ The boot and recovery partitions are preserved during these sessions.
 - No GPU driver: everything is drawn by the CPU.
 - No Wi-Fi, Bluetooth, cellular, audio, camera, sensors or Secure Enclave.
 - No App Store and no Apple ID.
-- The touch path exists but has not been exercised by a finger yet.
+- Touch transport and HID delivery have been exercised by real fingers; visual calibration and longer sessions remain to be checked.
 
 ## How it boots
 

@@ -4,15 +4,44 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
-**Latest continuation (Codex after latest OpenCode, 2026-10-22 15:10 UTC):
-repo moved to /home/admin/xlamiOS, origin Olegu621/xlamiOS-xnu-kernel (GitHub rename verified). Phone is in root
-recovery after0108. Bit-banged SPI6 + RPMh power works: actual Goodix9916R
-BERLIN version and197-byte IC_INFO checksums pass on hardware. CI0110
-39798201516 succeeded (10ed423), but poller NOT booted yet. Review found
-missing ACK data byte and missing committed F6 HID geometry;0111 fixes these.
-Native GPI remains diagnostic only. Buttons0097 passed all3 physical keys.
-User returned and requested latest OpenCode context read and continuation.
-This paragraph overrides stale status and old proposed next steps below.**
+**Latest continuation (Codex, 2026-10-22 15:23 UTC):
+Native Goodix TOUCH HARDWARE/HID PASS in0111. 844 validated reports, drops0,
+40 down/up pairs on finger0 and5 on finger1, no unpaired/stuck contacts.
+Peridot geometry1220x2712/logical1125x2436 offsets-47,-138 is logged.
+No panic/read/ACK/poller failure appears in the saved log. Device returned
+recovery; normal0111 (same kernel, spi7, NO timed reset) temporary boot accepted.
+Repo /home/admin/xlamiOS; origin Olegu621/xlamiOS-xnu-kernel.
+All3 physical keys previously passed0097. Native GPI remains diagnostic.
+This paragraph overrides stale work plans and untested-touch claims below.**
+
+### 0111 hardware result and ordinary image
+
+- CI **39801868447 succeeded**, kernel commit2d8ecb4. SHA256SUMS verified.
+  cycle-0111-touch/console.txt: BERLIN9916R/05800617,197-byte IC_INFO checksum
+  passes, address10308/head8/point8; poller starts and stays alive.
+- Hardware finger input:844 reports, drops0;90 transition log lines =45
+  balanced down/up pairs (finger0:40, finger1:5), including concurrent
+  contacts and lower-edge swipes. No contacts remain down in parsed log.
+  This proves controller->decoder->HID dispatch. Exact user-visible tap
+  calibration and all iOS gestures still need user observation.
+- Recovery returned and log pull passed. No panic/failure in SAVED log.
+  End-of-timer marker is absent, so do not infer the precise reset cause
+  solely from this log. Snapshot100s decodes correctly but is BLACK with
+  power=0: screen was asleep, not evidence of a rendering failure.
+- Diagnostic image shim/out/shim-boot-0111-touch.img SHA
+  d88ec729b2b9a45ac414f222003602d874d48f20bf1b2f7b796662947993cd9f.
+- Ordinary image shim/out/shim-boot-0111-normal.img uses SAME kernel/MAC ADT,
+  peridotspi7, cpus1, logger10s, sweetpanicreset1, sweetsample=-; no
+  sweetdiagreset or framebuffer-shot timer. SHA/kernel/run metadata at
+  research/diagnostics-20261022/normal-0111/boot.json. Temporary boot only;
+  existing recovery BCB retained for a future panic/reboot capture.
+  Ordinary image SHA dd58becccfc283bfff4cc8893cfa5ce4ec77e610d5fdcd346005ac4258e0f273.
+  Kernel SHA fa1b08ce256b55a2bb2989c7a4e9de8a0bbae3f3fcbcca127f43789024699cf3.
+- Source review in docs/PORTING-REFERENCES.md; new sources ios-topaz and
+  Snapintosh included. Existing HID user client already uses a command
+  gate, so no unproven extra dispatch gate was imported from sibling port.
+- tools/xnu-cc.py now infers the CI checkout directory from the log after
+  repo renames; old1034-command log and renamed-path command both parse.
 
 ### 0111 review of OpenCode touch poller — current work
 
