@@ -1,0 +1,266 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -25,7 +25,7 @@
+  * Everything else is accepted and logged once.
+  *
+  * SwapEnd copies the enabled layers' surfaces into the panel memory (no
+- * scaling, CPU copy). Vsync (notification type 5) is a 60 Hz timer that
++ * scaling on legacy panels, full-panel scale on peridot). Vsync (notification type 5) is a 60 Hz timer that
+  * sends (count, mach_absolute_time, 0) as 32-bit halves to clients that
+  * enabled it, through the port they registered (IOConnectSetNotificationPort).
+  *
+@@ -35,6 +35,7 @@
+  * the first swap on (it still reaches the persistent log; panics draw).
+  */
+ #include "SweetSurface.h"
++#include "SweetDisplayGeometry.h"
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ 
+@@ -75,7 +76,8 @@
+  * screens (UIKit: "No status bar visual provider for screen", the red
+  * rdar://45025538 bar for 360x800 points). The display is therefore
+  * presented as the iPhone X panel, 1125x2436 (375x812 points @3x), and the
+- * centered 1080x2400 part of it is shown on the 1080x2400 panel.
++ * centered 1080x2400 part is shown on sweet; peridot scales the full scene
++ * onto1220x2712. sweetfb_scale=0 restores the previous centered mapping.
+  * Boot-arg sweetfb_native=1 presents the real panel size instead.
+  */
+ #define SWEET_FB_LOGICAL_W              1125
+@@ -104,6 +106,8 @@
+ 	uint64_t      fPhys;
+ 	uint32_t      fWidth, fHeight, fRowBytes;
+ 	uint32_t      fLogicalW, fLogicalH;     /* size reported to userland */
++	bool          fScale;
++	uint32_t     *fScaleColumns;           /* private presenter scratch */
+ 	int32_t       fOffX, fOffY;             /* logical origin of the panel */
+ 	uintptr_t     fPixels;          /* kernel mapping of the panel memory */
+ 	IOMemoryMap  *fMap;
+@@ -176,9 +180,23 @@
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+ 	}
+-	/* Crop on smaller panels, center without scaling on larger panels. */
++	/* Legacy centering, overridden below by the full-panel scaler. */
+ 	fOffX = ((int32_t)fLogicalW - (int32_t)fWidth) / 2;
+ 	fOffY = ((int32_t)fLogicalH - (int32_t)fHeight) / 2;
++	int scale = sweet_display_scale_default(fWidth, fHeight);
++	PE_parse_boot_argn("sweetfb_scale", &scale, sizeof(scale));
++	fScale = scale != 0 && (fWidth != fLogicalW || fHeight != fLogicalH);
++	fScaleColumns = NULL;
++	if (fScale) {
++		if (fWidth > 16384 || fHeight > 16384) {
++			return false;
++		}
++		fOffX = fOffY = 0;
++		fScaleColumns = (uint32_t *)IOMallocData(fWidth * sizeof(uint32_t));
++		if (!fScaleColumns) {
++			return false;
++		}
++	}
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+@@ -186,6 +204,10 @@
+ 	fWorkLoop = IOWorkLoop::workLoop();
+ 	if (fLock == NULL || fClients == NULL || fPixels == 0 || fWorkLoop == NULL) {
+ 		IOLog("SWEET FB: setup failed\n");
++		if (fScaleColumns) {
++			IOFreeData(fScaleColumns, fWidth * sizeof(uint32_t));
++			fScaleColumns = NULL;
++		}
+ 		OSSafeReleaseNULL(fSurface);    /* stays published: also held by the table */
+ 		OSSafeReleaseNULL(fWorkLoop);
+ 		return false;
+@@ -193,6 +215,10 @@
+ 	fVsync = IOTimerEventSource::timerEventSource(this, &AppleCLCD::vsyncFired);
+ 	if (fVsync == NULL || fWorkLoop->addEventSource(fVsync) != kIOReturnSuccess) {
+ 		IOLog("SWEET FB: no vsync timer\n");
++		if (fScaleColumns) {
++			IOFreeData(fScaleColumns, fWidth * sizeof(uint32_t));
++			fScaleColumns = NULL;
++		}
+ 		return false;
+ 	}
+ 	uint32_t hz = 10;
+@@ -212,6 +238,7 @@
+ 	registerService();
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
++	IOLog("SWEET FB: panel mapping %s\n", fScale ? "full-panel scale" : "center/crop");
+ 	return true;
+ }
+ 
+@@ -456,6 +483,22 @@
+ 			w = (int32_t)s->width;
+ 			h = (int32_t)s->height;
+ 		}
++		if (fScale) {
++			struct sweet_display_buffer panel = { (uint8_t *)fPixels,
++			    fWidth, fHeight, fRowBytes, fSurface->memory->getLength(), 0 };
++			struct sweet_display_buffer surface = { (uint8_t *)src,
++			    s->width, s->height, s->bytesPerRow,
++			    s->memory ? s->memory->getLength() : 0, s->offset };
++			int32_t sw = (int32_t)get32(a, 8), sh = (int32_t)get32(a, 12);
++			struct sweet_display_rect from = { sx, sy, sw > 0 ? sw : w, sh > 0 ? sh : h };
++			struct sweet_display_rect to = { dx, dy, w, h };
++			if (bpe == 4 && s->elementWidth == 1 && s->elementHeight == 1) {
++				(void)sweet_display_scale_blit(&panel, &surface, fLogicalW, fLogicalH,
++				    from, to, fScaleColumns, fWidth);
++			}
++			s->release();
++			continue;
++		}
+ 		if (sx < 0 || sy < 0) {
+ 			sx = sy = 0;
+ 		}
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -22,6 +22,7 @@
+ #include <libkern/c++/OSArray.h>
+ #include <pexpert/pexpert.h>
+ 
++#include "../SweetDisplayGeometry.h"
+ #include "IOHIDEventService.h"
+ #include "IOHIDEventServiceUserClient.h"
+ #include "IOHIDEvent.h"
+@@ -368,6 +369,7 @@
+ private:
+ 	IOLock *fLock;
+ 	int fPhysicalW, fPhysicalH, fLogicalW, fLogicalH, fOffX, fOffY;
++	bool fScale;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -443,6 +445,12 @@
+ 	/* Same signed centering/cropping as SweetFramebuffer; no scaling. */
+ 	fOffX = (fLogicalW - fPhysicalW) / 2;
+ 	fOffY = (fLogicalH - fPhysicalH) / 2;
++	int scale = sweet_display_scale_default((uint32_t)fPhysicalW, (uint32_t)fPhysicalH);
++	PE_parse_boot_argn("sweetfb_scale", &scale, sizeof(scale));
++	fScale = scale != 0 && (fPhysicalW != fLogicalW || fPhysicalH != fLogicalH);
++	if (fScale) {
++		fOffX = fOffY = 0;
++	}
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
+@@ -451,6 +459,7 @@
+ 	registerService();
+ 	IOLog("SWEET HID: touch registered physical %dx%d logical %dx%d offset %d,%d\n",
+ 	    fPhysicalW, fPhysicalH, fLogicalW, fLogicalH, fOffX, fOffY);
++	IOLog("SWEET HID: touch mapping %s\n", fScale ? "full-panel inverse scale" : "center/crop");
+ 	return true;
+ }
+ 
+@@ -480,8 +489,12 @@
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+ 	/* Panel pixels -> the presented 1125x2436 display (SweetFramebuffer.cpp). */
+-	IOFixed nx = sweet_touch_coordinate(x, fOffX, fLogicalW);
+-	IOFixed ny = sweet_touch_coordinate(y, fOffY, fLogicalH);
++	IOFixed nx = fScale ? (IOFixed)((uint64_t)sweet_display_logical_pixel(
++	    (uint32_t)x, (uint32_t)fPhysicalW, (uint32_t)fLogicalW) * 65536 / fLogicalW) :
++	    sweet_touch_coordinate(x, fOffX, fLogicalW);
++	IOFixed ny = fScale ? (IOFixed)((uint64_t)sweet_display_logical_pixel(
++	    (uint32_t)y, (uint32_t)fPhysicalH, (uint32_t)fLogicalH) * 65536 / fLogicalH) :
++	    sweet_touch_coordinate(y, fOffY, fLogicalH);
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+ 	if (was == down && !moved) {
+ 		IOLockUnlock(fLock);
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetDisplayGeometry.h
+@@ -0,0 +1,93 @@
++/* Shared panel presentation and inverse touch geometry. No IOKit dependency. */
++#ifndef SWEET_DISPLAY_GEOMETRY_H
++#define SWEET_DISPLAY_GEOMETRY_H
++#include <stdint.h>
++
++static inline bool
++sweet_display_scale_default(uint32_t width, uint32_t height)
++{
++	return width == 1220 && height == 2712;
++}
++
++/* Pixel used by the presenter and by the digitizer's inverse map. */
++static inline uint32_t
++sweet_display_logical_pixel(uint32_t pixel, uint32_t physical, uint32_t logical)
++{
++	if (!physical || !logical) {
++		return 0;
++	}
++	if (pixel >= physical) {
++		pixel = physical - 1;
++	}
++	return (uint32_t)((uint64_t)pixel * logical / physical);
++}
++
++struct sweet_display_buffer {
++	uint8_t *pixels;
++	uint32_t width, height, stride;
++	uint64_t bytes, offset;
++};
++struct sweet_display_rect { int32_t x, y, width, height; };
++
++static inline bool
++sweet_display_buffer_valid(const struct sweet_display_buffer *b)
++{
++	if (!b || !b->pixels || !b->width || !b->height ||
++	    b->width > 16384 || b->height > 16384 || (b->stride & 3) ||
++	    ((uintptr_t)b->pixels & 3) || (b->offset & 3) ||
++	    b->stride < (uint64_t)b->width * 4 || b->offset > b->bytes) {
++		return false;
++	}
++	return (uint64_t)(b->height - 1) * b->stride + (uint64_t)b->width * 4 <=
++	       b->bytes - b->offset;
++}
++
++/* Nearest-neighbour scaling of a logical layer into the physical panel.
++ * Clip destination rectangles in logical space; source bounds and memory
++ * lengths are checked before any pixel is touched. Columns are private
++ * work-loop scratch, allocated once rather than on the kernel stack. */
++static inline bool
++sweet_display_scale_blit(const struct sweet_display_buffer *dst,
++    const struct sweet_display_buffer *src, uint32_t logical_w, uint32_t logical_h,
++    struct sweet_display_rect from, struct sweet_display_rect to,
++    uint32_t *columns, uint32_t capacity)
++{
++	if (!sweet_display_buffer_valid(dst) || !sweet_display_buffer_valid(src) ||
++	    dst->pixels == src->pixels || !columns || capacity < dst->width ||
++	    !logical_w || !logical_h || logical_w > 16384 || logical_h > 16384 ||
++	    from.x < 0 || from.y < 0 || from.width <= 0 || from.height <= 0 ||
++	    (int64_t)from.x + from.width > src->width ||
++	    (int64_t)from.y + from.height > src->height || to.width <= 0 || to.height <= 0) {
++		return false;
++	}
++	int64_t left = to.x < 0 ? 0 : to.x;
++	int64_t top = to.y < 0 ? 0 : to.y;
++	int64_t right = (int64_t)to.x + to.width;
++	int64_t bottom = (int64_t)to.y + to.height;
++	right = right > logical_w ? logical_w : right;
++	bottom = bottom > logical_h ? logical_h : bottom;
++	if (left >= right || top >= bottom) {
++		return true;
++	}
++	uint32_t x0 = (uint32_t)((left * dst->width + logical_w - 1) / logical_w);
++	uint32_t x1 = (uint32_t)((right * dst->width + logical_w - 1) / logical_w);
++	uint32_t y0 = (uint32_t)((top * dst->height + logical_h - 1) / logical_h);
++	uint32_t y1 = (uint32_t)((bottom * dst->height + logical_h - 1) / logical_h);
++	for (uint32_t x = x0; x < x1; ++x) {
++		uint32_t lx = sweet_display_logical_pixel(x, dst->width, logical_w);
++		columns[x] = (uint32_t)from.x + (uint32_t)(
++		    (uint64_t)((int64_t)lx - to.x) * (uint32_t)from.width / (uint32_t)to.width);
++	}
++	for (uint32_t y = y0; y < y1; ++y) {
++		uint32_t ly = sweet_display_logical_pixel(y, dst->height, logical_h);
++		uint32_t sy = (uint32_t)from.y + (uint32_t)(
++		    (uint64_t)((int64_t)ly - to.y) * (uint32_t)from.height / (uint32_t)to.height);
++		const uint32_t *in = (const uint32_t *)(src->pixels + src->offset + (uint64_t)sy * src->stride);
++		uint32_t *out = (uint32_t *)(dst->pixels + dst->offset + (uint64_t)y * dst->stride);
++		for (uint32_t x = x0; x < x1; ++x) {
++			out[x] = in[columns[x]];
++		}
++	}
++	return true;
++}
++#endif

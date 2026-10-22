@@ -14,6 +14,26 @@ Repo /home/admin/xlamiOS; origin Olegu621/xlamiOS-xnu-kernel.
 All3 physical keys previously passed0097. Native GPI remains diagnostic.
 This paragraph overrides stale work plans and untested-touch claims below.**
 
+### 0112 GPU inventory +0113 full-panel presentation — prepared
+
+-0113 fills the physical1220x2712 panel from the working1125x2436 logical
+  iOS scene. Both framebuffer and digitizer use SweetDisplayGeometry.h
+  for the exact same physical-pixel -> logical-pixel mapping. The working
+  display identity/scaler workaround stays1125x2436; this is full-panel
+  presentation, not native-resolution rendering inside iOS.
+- Default scaling only on the measured1220x2712 panel; sweetfb_scale=0
+  restores prior centered/cropped output and the matching touch mapping.
+  Source/destination rectangles, row strides, offsets and allocation lengths
+  are checked; negative destination rects clipped; unsafe source spans rejected.
+  X lookup scratch is allocated once on the heap, not on the kernel stack.
+- CPU nearest-neighbour scaler, not GPU acceleration. Existing CPU rendering
+  remains. No GPU writes introduced;0112 is a separate explicit boot arg.
+- FB/HID local cross-compile passed. ASan/UBSan actual-header checks cover
+  ALL1220x2712 pixels, inverse mapping,4000 clipped/scaled/partial rectangles,
+  padded strides/offsets/canaries, invalid spans and extreme signed coords.
+- Next CI0113, timed boot spi7/peridotgpu1/diag120/shot80. Phone is still
+  on ordinary0111; manual fastboot needed for the next temporary image.
+
 ### GPU continuation and screen-size request (current work)
 
 - User requested GPU work, then full-panel resolution. Preserve both tasks.
