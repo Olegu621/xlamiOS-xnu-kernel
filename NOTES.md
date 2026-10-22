@@ -4,14 +4,35 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
-**Latest continuation (Codex, after OpenCode): phone is in root recovery after0102 timed boot.
-SPMI/key patch 0097 passed its first hardware test: all three buttons
-produce matched down/up events delivered to a live HID client. Native
-SPI FIFO cannot receive in this IF=1 mode (0098/0099 hardware).0100 found
-free GPI channels and an unmatched/faulting DMA SID.0103 starts private DMA
-channels but loopback times out;0104/0105 add event and screen diagnostics.
-Do not ask user questions: user has left home and requested autonomous work.
-This paragraph and the next section override stale device/status claims below.**
+**Latest continuation (Codex after latest OpenCode, 2026-10-22 15:10 UTC):
+repo moved to /home/admin/xlamiOS, origin Olegu621/xlamiOS. Phone is in root
+recovery after0108. Bit-banged SPI6 + RPMh power works: actual Goodix9916R
+BERLIN version and197-byte IC_INFO checksums pass on hardware. CI0110
+39798201516 succeeded (10ed423), but poller NOT booted yet. Review found
+missing ACK data byte and missing committed F6 HID geometry;0111 fixes these.
+Native GPI remains diagnostic only. Buttons0097 passed all3 physical keys.
+User returned and requested latest OpenCode context read and continuation.
+This paragraph overrides stale status and old proposed next steps below.**
+
+### 0111 review of OpenCode touch poller — current work
+
+- Latest actual OpenCode session ses_e9c5aa07fffexFTMAW0nA0vhWl ends at
+  0110 CI request; no later hardware touch test exists. UI/README changes
+  and repo move are already committed; no unrelated files changed here.
+- 0109 ACK used only5bytes (F0+address), omitting the zero status payload.
+  0111 sends6bytes F0 00 01 03 08 00 to release the report, preventing
+  repeated stale frames. First finger test should use0111, not0110.
+- F6 HID geometry existed only in ignored buildtree, absent from all0108-
+  0110 patches: hardware0108 logs generic touch registration.0111 commits
+  actual panel dimensions/signed crop/clamp and avoids signed-shift UB.
+- Require checksummed IC_INFO addr10308/header8/point8 before polling,
+  release contacts/stop on failed header/frame read, drop creator's thread
+  reference after successful start. No firmware/config uploads.
+- Local SPI+HID cross-compile passes. Actual parser/ACK ASan/UBSan checks
+  pass, including exact6-byte status write,0..10 contacts and bad checksums.
+- CI0110 kernel SHA256SUMS verified. Download CI tree and prove0111 bases,
+  then commit/build0111 and temporary spi7/180s/snapshot with automatic
+  recovery capture. Physical finger/UI response still unproven.
 
 ### Corrected touchscreen facts (Codex, confirmed in live recovery)
 
