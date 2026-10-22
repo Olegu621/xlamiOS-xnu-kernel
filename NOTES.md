@@ -16,9 +16,22 @@ This paragraph overrides stale work plans and untested-touch claims below.**
 
 ### 0112 GPU inventory +0113 full-panel presentation — prepared
 
-- Commit219034b; CI39808131342 running. Actual scaler ASan/UBSan harness
-  rerun passes. No fastboot/ADB device currently enumerated; phone remains
+- Commit219034b; CI39808131342 SUCCESS. Artifact SHA256SUMS verified;
+  kernel SHA faba6da0f8e809d4002cf30707d671182ba3165f6f4a48226ad34844b4fac3ce.
+  Actual scaler ASan/UBSan harness rerun passes. No fastboot/ADB device
+  currently enumerated at15:56UTC; phone remains
   on ordinary0111 until manually returned to fastboot. No0113 hardware result.
+- Current shim rebuilt twice; boot-image embedded payload checked byte-for-byte.
+  shim/out/shim-boot-0113-normal.img (spi7, no diagnostic timer, no GPU probe)
+  SHA97cc8cc37fb0119c9371753641f5a2dc0e5bcec1c1957215e0bce115e01b0fe7.
+  shim/out/shim-boot-0113-scale-gpu.img (spi7,gpu1,diag120,shot80)
+  SHAc95b9beff5937aed105ceda2bfbd564fb182b0a3d343efb72d34b6b35b6019ca.
+  Manifest/logs research/diagnostics-20261022/images-0113/; both unbooted.
+  NEXT when fastboot appears: tempboot /tmp/opencode/peridot/recovery.img,
+  collect matching GPU firmware/read-only info, then peridot-cycle diagnostic.
+  Inspect display mapping logs and screenshot (power0 black != rendering fault),
+  then leave ordinary0113 if hardware passes. No active automated cycle or
+  host sleep inhibitor. Do not claim the resolution change is hardware-proven.
 - Found primary OnePlus SM8635 KGSL at1a24977367ee2d77998fc6957eb61a99331a347d.
   Exact gen7_11_0 profile agrees with recovery module firmware/hwsched;
   confirms1536KiB GMEM,16MiB UCHE align, hub200MHz, context2196KiB.
