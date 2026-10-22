@@ -1,21 +1,22 @@
-# hackiosx.dev
+# xlamiOS
 
-> Documentation for ios-sweet, an open-source project that boots Apple's real iOS 16.7.16 (the iPhone X userland) on a Redmi Note 10 Pro (Qualcomm Snapdragon 732G, codename sweet). It uses Apple's open-source XNU kernel (xnu-8796) with patches and new drivers for the phone's hardware. It is not an emulator or a launcher theme. Source: https://github.com/dipa-studio/ios-sweet
+> Documentation for xlamiOS, an open-source project that boots Apple's real iOS 16.7 (the iPhone X userland) on the POCO F6 (Qualcomm SM8635 / Snapdragon 8s Gen 3, codename peridot). It uses Apple's open-source XNU kernel (xnu-8796) with patches and new drivers for the phone's hardware. It is not an emulator or a launcher theme. Source: https://github.com/Olegu621/xlamiOS
 
-Current state: boots to the iOS lock screen and home screen; touch, gesture navigation, buttons, Settings, Control Center and all 8 CPU cores work. No Wi-Fi, Bluetooth, cellular, audio, camera or GPU (the CPU renders everything). Only the Redmi Note 10 Pro runs it today; other Snapdragon phones with UFS storage can be ported.
+Current state: the iOS userland runs — launchd, backboardd, SpringBoard, the lock screen, the home screen, Control Center, the notification center and Settings. The display is a software-rendered 1125x2436 logical surface, the power and volume keys work as HID consumer keys through the PMIC over SPMI, the internal UFS holds the iOS root volume, and the touch panel is a Goodix BerlinD (9916R) whose registers are read over a bit-banged SPI. Missing: no GPU driver (the CPU renders every frame), no Wi-Fi, Bluetooth, cellular, audio, camera or sensors, no App Store and no Apple ID, and the touch path has not been exercised by a finger yet. Nothing is flashed: the stock bootloader is entered with `fastboot boot` of a temporary image, a bare-metal shim maps the kernel and the iOS root volume and hands over to XNU, and a timer resets the machine back into the bootloader at the end of every session. Only the POCO F6 runs it today; other Snapdragon phones with UFS storage can be ported.
 
 ## Docs
 
 - [Home](https://hackiosx.dev/): what works, what is missing
-- [How it works](https://hackiosx.dev/how-it-works): boot chain (Xiaomi bootloader, shim, XNU, Apple Device Tree), where the drivers come from, why an iPhone X, software rendering, what is faked
-- [Compatibility](https://hackiosx.dev/compatibility): which phones could run it, grouped by chip family (Snapdragon, Tensor, MediaTek, Exynos)
+- [How it works](https://hackiosx.dev/how-it-works): boot chain (stock bootloader, shim, XNU, Apple Device Tree), where the drivers come from, why an iPhone X, software rendering, what is faked
+- [Compatibility](https://hackiosx.dev/compatibility): the POCO F6 today and what a port to another phone involves, grouped by chip family (Snapdragon, Tensor, MediaTek, Exynos)
 - [Port it to your phone](https://hackiosx.dev/porting): the hardware-specific files (tools/mkadt.py, shim/, board driver patches in xnu/patches/), where to find the values in the phone's device tree, first-boot stages
-- [Future plans](https://hackiosx.dev/future): Wi-Fi, Bluetooth, possible GPU acceleration
+- [Future plans](https://hackiosx.dev/future): the touch path, the radios, possible GPU acceleration
 
 ## Source
 
-- [GitHub repository](https://github.com/dipa-studio/ios-sweet): README with full build and install steps for the Redmi Note 10 Pro
-- [Kernel patches](https://github.com/dipa-studio/ios-sweet/tree/main/xnu/patches)
+- [GitHub repository](https://github.com/Olegu621/xlamiOS): README with the build steps for the POCO F6
+- [Bring-up log](https://github.com/Olegu621/xlamiOS/blob/main/NOTES.md): every boot attempt and its result
+- [Kernel patches](https://github.com/Olegu621/xlamiOS/tree/main/xnu/patches)
 
 ## Community
 

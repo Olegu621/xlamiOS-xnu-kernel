@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Compatibility | hackiosx</title>
-<meta name="description" content="Which Android phones could run ios-sweet, grouped by chip family: Snapdragon, MediaTek, Exynos, Tensor and others.">
+<title>Compatibility | xlamiOS</title>
+<meta name="description" content="Which phones could run xlamiOS: the POCO F6 today, and what a port to another phone involves, grouped by chip family.">
 <meta name="theme-color" content="#212121">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,13 +15,13 @@
 <body>
 <header class="appbar">
 <button class="menu-btn" aria-label="Menu" onclick="document.body.classList.toggle('nav-open')"><svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg></button>
-<a class="brand" href="index.html">hackios<b>x</b></a>
+<a class="brand" href="index.html">xlami<b>OS</b></a>
 <span class="spacer"></span>
 <a class="ext hide-sm" href="https://www.reddit.com/r/hackios/">r/hackios</a>
-<a class="ext" href="https://github.com/dipa-studio/ios-sweet">GitHub</a>
+<a class="ext" href="https://github.com/Olegu621/xlamiOS">GitHub</a>
 </header>
 <nav class="drawer">
-<div class="head">hackios<b style="color:var(--accent);font-weight:500">x</b></div>
+<div class="head">xlami<b style="color:var(--accent);font-weight:500">OS</b></div>
 <div class="sub">Docs</div>
 <a href="index.html">Home</a>
 <a href="how-it-works.html">How it works</a>
@@ -30,47 +30,47 @@
 <a href="future.html">Future plans</a>
 <hr>
 <div class="sub">Links</div>
-<a href="https://github.com/dipa-studio/ios-sweet">Source on GitHub</a>
-<a href="https://github.com/MakrSas/ios-topaz">Redmi Note 12 port</a>
-<a href="https://github.com/ch1tmdgus/ios-v60">LG V60 port</a>
+<a href="https://github.com/Olegu621/xlamiOS">Source on GitHub</a>
+<a href="https://github.com/Olegu621/xlamiOS/blob/main/NOTES.md">Bring-up log (NOTES.md)</a>
+<a href="https://github.com/Olegu621/xlamiOS/tree/main/xnu/patches">Kernel patches</a>
 <a href="https://www.reddit.com/r/hackios/">r/hackios</a>
 </nav>
 <div class="scrim" onclick="document.body.classList.remove('nav-open')"></div>
 <main><div class="page">
 <h1>Will it work on my phone?</h1>
-<p class="lead">Only one phone runs it today: the Redmi Note 10 Pro (<code>sweet</code>). Every other phone needs a port. How much work that port is depends almost entirely on the chip inside, so this page groups phones by chip family instead of listing models.</p>
+<p class="lead">One phone runs it today: the POCO F6 (<code>peridot</code>, SM8635 / Snapdragon 8s Gen 3). Every other phone needs a port, and a port here means rewriting the hardware-facing code, not changing a setting. This page lists what a phone has to have, and then groups the realistic candidates by chip family.</p>
 
 <h2 id="the-basics-your-phone-needs">The basics your phone needs</h2>
 <ul>
-<li><strong>An unlockable bootloader</strong> that supports <code>fastboot boot</code> (booting an image from the PC without flashing it). Xiaomi, Poco, OnePlus, Pixel and most Motorola phones can do this. Samsung phones use Odin instead of fastboot, and Huawei bootloaders can't be unlocked anymore.</li>
+<li><strong>An unlockable bootloader</strong> that supports <code>fastboot boot</code> (booting an image from the PC without flashing it). Xiaomi and Poco bootloaders can do this. Samsung phones use Odin instead of fastboot, and Huawei bootloaders can't be unlocked anymore.</li>
 <li><strong>A 64-bit ARM chip.</strong> Every phone from the last eight or so years has one.</li>
-<li><strong>UFS storage.</strong> ios-sweet has a UFS driver. Phones with eMMC storage (common in budget models) need a new storage driver first.</li>
-<li><strong>4 GB of RAM or more.</strong> The iPhone X has 3 GB, and the kernel can't use all of the phone's memory because Qualcomm reserves parts of it.</li>
-<li><strong>A screen the bootloader leaves on.</strong> ios-sweet draws into the image buffer the bootloader uses for its logo. Almost all Qualcomm phones do this.</li>
+<li><strong>UFS storage.</strong> xlamiOS has its own UFS host driver; on this phone the controller is at <code>0x1d84000</code>. Phones with eMMC storage (common in budget models) need a new storage driver first.</li>
+<li><strong>Enough RAM.</strong> The kernel uses the upper DDR bank: on this phone the high-memory window is a 3 GiB contiguous block at <code>0x08c0000000</code>, plus a private DMA arena for the display and the SPI engine. The kernel can't use all of the phone's memory &mdash; the low bank is broken up by carve-outs &mdash; which is why the port uses the high window.</li>
+<li><strong>A screen the bootloader leaves on.</strong> xlamiOS draws into the image buffer the bootloader uses for its logo, on this phone the splash region at <code>0xe3940000</code>. Almost all Qualcomm phones do this.</li>
 </ul>
 
 <h2 id="chip-families">Chip families</h2>
 <div class="table-wrap"><table>
 <tr><th>Chip</th><th>Chance</th><th>What a port involves</th></tr>
 <tr>
-<td><strong>Snapdragon 730 / 730G / 732G</strong> (SM7150)<br>e.g. Poco X3 NFC, Poco X3, Redmi Note 10 Pro Max, Mi 9T, Mi Note 10, Pixel 4a</td>
+<td><strong>Snapdragon 8s Gen 3</strong> (SM8635)<br>POCO F6, codename <code>peridot</code></td>
 <td><span class="chip good">Best</span></td>
-<td>Same chip as the Redmi Note 10 Pro, so the kernel side mostly works as is. You change the board details: screen size, touch controller, button wiring, memory layout. If the phone uses a different touch chip, that driver needs a new protocol.</td>
+<td>This is the port that exists. The kernel drives the v7 SPMI arbiter for the keys, the serial engine SE4 at <code>0xa90000</code> for the touch panel, the <code>qcom,cliffs-gcc</code> clock controller and the internal UFS. The panel is a Goodix BerlinD (9916R) whose registers are read over bit-banged SPI, and the keys come from the PMIC over SPMI.</td>
 </tr>
 <tr>
-<td><strong>Snapdragon from 2018 on</strong><br>845, 855, 865, 870, 888, 8 Gen 1/2/3, 7xx, 690, 750G and most newer chips with UFS</td>
+<td><strong>Snapdragon 8 Gen 1 and newer</strong><br>every 8-series chip from the 8 Gen 1 on</td>
 <td><span class="chip good">Good</span></td>
-<td>Same building blocks as the 732G: the same interrupt controller type, the same kind of power controller (RPMh) and the same serial engines for I²C. Mostly the addresses differ, so a port means updating a few config values (memory map, storage, screen) and pointing the touch and button drivers at your phone's hardware. Some cheaper chips of this era (the 662 and 665, for example) still use the older RPM power controller, see the next row. The newest chips (8 Gen 1 and later) change a few blocks, like a newer PMIC bus, and need more work.</td>
+<td>Same building blocks as the SM8635: the same interrupt controller type, the same kind of power controller (RPMh) and the same serial engines. The details differ per family &mdash; the clock controller has a different compatible string, the SPMI arbiter may be an older revision, and the serial engine's DMA path needs its own SMMU route. So a port means new board data (memory map, storage, screen, touch, buttons) and a new SPI transport, not a new kernel.</td>
 </tr>
 <tr>
-<td><strong>Older Snapdragon</strong><br>820/821, 835, 625, 636, 660 and similar</td>
+<td><strong>Older Snapdragon</strong><br>SM7150 and the 7xx generation</td>
 <td><span class="chip hard">Hard</span></td>
-<td>These use an older power controller (RPM instead of RPMh) and an older I²C block, so the touch power and touch drivers have to be rewritten. Many of them have eMMC storage. Their CPU cores are an older ARM generation than the iPhone X's chip, and nobody has tested whether iOS 16 runs well on them.</td>
+<td>This project started on the Redmi Note 10 Pro (SM7150, <code>sweet</code>) and that port was paused in October 2026. Its code path is deliberately gated off on SM8635: the SM7150 key, touch and USB probes are refused on this SoC, because they read registers that mean something else here. Bringing that board back is a port in its own right.</td>
 </tr>
 <tr>
 <td><strong>Snapdragon with eMMC</strong><br>many 4xx and some 6xx phones</td>
 <td><span class="chip hard">Hard</span></td>
-<td>Everything in the row above that matches your chip, plus a new eMMC (SDHCI) storage driver, since iOS has to live somewhere.</td>
+<td>Everything in the row above that matches your chip, plus a new eMMC (SDHCI) storage driver, since the iOS root has to live somewhere and all of the storage work here is a UFS host driver.</td>
 </tr>
 <tr>
 <td><strong>Google Tensor</strong> (Pixel 6 and later)</td>
@@ -90,17 +90,19 @@
 </table></div>
 
 <h2 id="quick-answers">Quick answers</h2>
-<h3>Poco X3 NFC? It has the same chip.</h3>
-<p>Most likely yes. It's the easiest port there is: same SoC, different board. See <a href="porting.html">Port it to your phone</a>.</p>
+<h3>POCO F6?</h3>
+<p>Yes. SM8635, Snapdragon 8s Gen 3, 12 GB of RAM, UFS 4.0 and a 1220 x 2712 panel. Everything in the table above the SM7150 row is about making that work.</p>
+<h3>Another phone with the same chip?</h3>
+<p>It would be a real port, not a configuration change. The platform is <code>peridot</code>, but the board data is not shared: the panel, the touch controller, the key wiring and the memory map all come from your own phone's device tree. The kernel's peridot path is gated to the SM8635, and the old SM7150 probes are refused there on purpose.</p>
 <h3>My phone is MediaTek (Redmi Note 9, many Redmi and Realme models).</h3>
 <p>Probably not. Look up the exact chip first: some phones sold under the same name come in both a MediaTek and a Snapdragon version.</p>
 <h3>Can I run iPadOS on my Android tablet?</h3>
 <p>Not with this project. iPadOS comes from a different firmware and expects iPad hardware. The same approach could work in theory, but nobody has done it.</p>
 <h3>Can it run iOS 17, 18 or newer?</h3>
-<p>Not on this path. Every iPhone that runs iOS 17 or newer is built for pointer authentication (arm64e). The Snapdragon 732G in this phone, like most ARMv8.2 chips, doesn't have it, so this path stops at iOS 16 on the iPhone X. (<a href="how-it-works.html#why-an-iphone-x">Why an iPhone X?</a>)</p>
+<p>Not on this path. Every iPhone that runs iOS 17 or newer is built for pointer authentication (arm64e). The kernel here is built in plain arm64, and the userland is the iPhone X's, so this path stops at iOS 16. (<a href="how-it-works.html#why-an-iphone-x">Why an iPhone X?</a>)</p>
 <h3>How do I find out which chip I have?</h3>
 <p>Search your model on GSMArena and look at the "Chipset" line, or install an app like CPU-Z. The storage type (UFS or eMMC) is listed there too.</p>
-<footer>hackiosx.dev documents the open-source <a href="https://github.com/dipa-studio/ios-sweet">ios-sweet</a> project. It is not affiliated with Apple. iOS is Apple's software and is not distributed here.</footer>
+<footer>This site documents the open-source <a href="https://github.com/Olegu621/xlamiOS">xlamiOS</a> project. It is not affiliated with Apple. iOS is Apple's software and is not distributed here.</footer>
 </div></main>
 <script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4da96b48ebfb4b5',t:'MTc5MjUyNjIxNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>

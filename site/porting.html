@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Port it to your phone | hackiosx</title>
-<meta name="description" content="The hardware-specific parts of ios-sweet, where to find your phone&#x27;s values, and how to test a port.">
+<title>Port it to your phone | xlamiOS</title>
+<meta name="description" content="The hardware-specific parts of xlamiOS, where to find your phone&#x27;s values, and how to test a port.">
 <meta name="theme-color" content="#212121">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,13 +15,13 @@
 <body>
 <header class="appbar">
 <button class="menu-btn" aria-label="Menu" onclick="document.body.classList.toggle('nav-open')"><svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg></button>
-<a class="brand" href="index.html">hackios<b>x</b></a>
+<a class="brand" href="index.html">xlami<b>OS</b></a>
 <span class="spacer"></span>
 <a class="ext hide-sm" href="https://www.reddit.com/r/hackios/">r/hackios</a>
-<a class="ext" href="https://github.com/dipa-studio/ios-sweet">GitHub</a>
+<a class="ext" href="https://github.com/Olegu621/xlamiOS">GitHub</a>
 </header>
 <nav class="drawer">
-<div class="head">hackios<b style="color:var(--accent);font-weight:500">x</b></div>
+<div class="head">xlami<b style="color:var(--accent);font-weight:500">OS</b></div>
 <div class="sub">Docs</div>
 <a href="index.html">Home</a>
 <a href="how-it-works.html">How it works</a>
@@ -30,18 +30,18 @@
 <a href="future.html">Future plans</a>
 <hr>
 <div class="sub">Links</div>
-<a href="https://github.com/dipa-studio/ios-sweet">Source on GitHub</a>
-<a href="https://github.com/MakrSas/ios-topaz">Redmi Note 12 port</a>
-<a href="https://github.com/ch1tmdgus/ios-v60">LG V60 port</a>
+<a href="https://github.com/Olegu621/xlamiOS">Source on GitHub</a>
+<a href="https://github.com/Olegu621/xlamiOS/blob/main/NOTES.md">Bring-up log (NOTES.md)</a>
+<a href="https://github.com/Olegu621/xlamiOS/tree/main/xnu/patches">Kernel patches</a>
 <a href="https://www.reddit.com/r/hackios/">r/hackios</a>
 </nav>
 <div class="scrim" onclick="document.body.classList.remove('nav-open')"></div>
 <main><div class="page">
 <h1>Port it to your phone</h1>
-<p class="lead">On a Snapdragon phone, almost everything that is specific to the Redmi Note 10 Pro sits in three places: the device tree generator, the boot shim, and the board drivers in the kernel patches. This page walks through all three and shows where to look up your phone's values.</p>
+<p class="lead">On this phone, almost everything that is specific to the POCO F6 sits in three places: the device tree generator, the boot shim, and the board drivers in the kernel patches. This page walks through all three and shows where to look up your phone's values.</p>
 
 <div class="warn">
-<p><strong>Before you touch anything, back up your phone.</strong> Boot a recovery such as OrangeFox or TWRP and pull at least <code>persist</code>, <code>modemst1</code>, <code>modemst2</code>, <code>fsg</code>, <code>fsc</code>, <code>boot</code>, <code>dtbo</code> and <code>vbmeta</code>. Some of these hold calibration data that is unique to your phone and can't be downloaded anywhere. Keep them out of git.</p>
+<p><strong>Before you touch anything, back up your phone.</strong> Pull at least <code>persist</code>, <code>modemst1</code>, <code>modemst2</code>, <code>fsg</code>, <code>fsc</code>, <code>boot_a</code>/<code>boot_b</code>, <code>vendor_boot_a</code>/<code>vendor_boot_b</code>, <code>dtbo_a</code>/<code>dtbo_b</code> and <code>vbmeta_a</code>/<code>vbmeta_b</code>. Some of these hold calibration data that is unique to your phone and can't be downloaded anywhere. Keep them out of git.</p>
 </div>
 
 <p>Check the <a href="compatibility.html">compatibility page</a> first. This guide assumes a Snapdragon chip with UFS storage and a bootloader that supports <code>fastboot boot</code>.</p>
@@ -51,7 +51,7 @@
 <pre><code>adb shell cat /sys/firmware/fdt &gt; live.dtb
 adb shell cat /proc/iomem &gt; iomem.txt
 dtc -I dtb -O dts -o live.dts live.dtb      # dtc is in the device-tree-compiler package</code></pre>
-<p><code>live.dts</code> is a big text file. Every value below comes from searching it. You'll also want your phone's kernel source (Xiaomi, OnePlus and others publish it on GitHub) for anything the device tree doesn't spell out, like the touch controller's protocol.</p>
+<p><code>live.dts</code> is a big text file. Every value below comes from searching it. You'll also want your phone's kernel source (Xiaomi, Poco and others publish it on GitHub) for anything the device tree doesn't spell out, like the touch controller's protocol. On this phone the live device tree was read in OrangeFox recovery, because the phone's own Android root was no longer usable.</p>
 <p>Also unpack your stock <code>boot.img</code>, because the shim reuses its DTB:</p>
 <pre><code>python3 tools/unpack_bootv2.py backup/boot.img dtb/boot_unpacked</code></pre>
 
@@ -59,54 +59,70 @@ dtc -I dtb -O dts -o live.dts live.dtb      # dtc is in the device-tree-compiler
 <p>XNU learns about the hardware from an Apple Device Tree. <code>mkadt.py</code> writes one from the constants at the top of the file. These are the ones to change:</p>
 <div class="table-wrap"><table>
 <tr><th>Constant</th><th>What it is</th><th>Where to find it in live.dts</th></tr>
-<tr><td><code>HIGH_PHYS_BASE</code>, <code>HIGH_MEM_SIZE</code></td><td>The RAM the kernel may use</td><td>The <code>memory</code> node, plus every entry under <code>reserved-memory</code>. Pick a range with no carve-outs in it. On sweet that's the whole bank above 4 GB.</td></tr>
-<tr><td><code>GICD</code>, <code>GICR</code></td><td>Interrupt controller</td><td><code>interrupt-controller@...</code> with <code>compatible = "arm,gic-v3"</code>. The first two <code>reg</code> entries.</td></tr>
-<tr><td><code>FB</code>, <code>FB_SIZE</code></td><td>The screen buffer the bootloader leaves on</td><td><code>cont_splash_region</code> (sometimes <code>splash_region</code>) under <code>reserved-memory</code></td></tr>
-<tr><td><code>FB_W</code>, <code>FB_H</code>, <code>FB_STRIDE</code></td><td>Panel resolution and bytes per line</td><td>The panel node (<code>qcom,mdss_dsi_...</code>), <code>qcom,mdss-dsi-panel-width</code> and <code>-height</code>. Stride is usually width x 4.</td></tr>
-<tr><td><code>UFS</code>, <code>UFS_SIZE</code></td><td>The storage controller</td><td><code>ufshc@...</code>, the <code>reg</code> named <code>ufs_mem</code></td></tr>
-<tr><td><code>TIMEBASE</code>, <code>VTIMER_INTID</code></td><td>System timer</td><td>The <code>timer</code> node with <code>arm,armv8-timer</code>. The frequency is almost always 19.2 MHz on Snapdragon. The virtual timer is the third interrupt; a PPI number <em>n</em> becomes INTID 16 + <em>n</em>.</td></tr>
-<tr><td>CPU nodes</td><td>How many cores, and their hardware IDs</td><td>The <code>cpus</code> node: each core's <code>reg</code> (its MPIDR). sweet has 8 cores at <code>0x000</code> to <code>0x700</code>; the loop in <code>mkadt.py</code> builds them as <code>core &lt;&lt; 8</code>.</td></tr>
+<tr><td><code>PHYS_BASE</code>, <code>MEM_SIZE</code>, and <code>HIGH_PHYS_BASE</code>, <code>HIGH_MEM_SIZE</code></td><td>The RAM the kernel may use</td><td>The <code>memory</code> node, plus every entry under <code>reserved-memory</code>. Pick a range with no carve-outs in it. The high-memory window is the top DDR bank; on this phone it is <code>0x08c0000000</code> / <code>0x0c0000000</code>, 3 GiB contiguous.</td></tr>
+<tr><td><code>GICD</code>, <code>GICR</code></td><td>Interrupt controller</td><td><code>interrupt-controller@...</code> with <code>compatible = "arm,gic-v3"</code>. The first two <code>reg</code> entries: <code>0x17100000</code> and <code>0x17180000</code> here, with <code>GICR_SIZE</code> <code>0x200000</code> and a PE stride of <code>0x40000</code>.</td></tr>
+<tr><td><code>FB</code>, <code>FB_SIZE</code></td><td>The screen buffer the bootloader leaves on</td><td><code>cont_splash_region</code> (sometimes <code>splash_region</code>) under <code>reserved-memory</code>. On this phone the buffer is at <code>0xe3940000</code>.</td></tr>
+<tr><td><code>FB_W</code>, <code>FB_H</code>, <code>FB_STRIDE</code></td><td>Panel resolution and bytes per line</td><td>The panel node (<code>qcom,mdss_dsi_...</code>), <code>qcom,mdss-dsi-panel-width</code> and <code>-height</code>: <code>1220</code> and <code>2712</code> here. Stride is width x 4, so <code>4880</code>.</td></tr>
+<tr><td><code>UFS</code>, <code>UFS_SIZE</code></td><td>The storage controller</td><td><code>ufshc@...</code>, the <code>reg</code> named <code>ufs_mem</code>: <code>0x1d84000</code> here, size <code>0x3000</code>.</td></tr>
+<tr><td><code>TIMEBASE</code>, <code>VTIMER_INTID</code>, <code>PTIMER_INTID</code></td><td>System timer</td><td>The <code>timer</code> node with <code>arm,armv8-timer</code>. The frequency is almost always 19.2 MHz on Snapdragon. The virtual timer is a PPI number <em>n</em> and becomes INTID 16 + <em>n</em>: 27 for the virtual timer and 30 for the physical timer on this phone.</td></tr>
+<tr><td>CPU nodes</td><td>How many cores, and their hardware IDs</td><td>The <code>cpus</code> node: each core's <code>reg</code> (its MPIDR). This phone has 8 cores, 3 in the first cluster, 4 in the second and the X4 prime in the third; the loop in <code>mkadt.py</code> builds them as <code>core &lt;&lt; 8</code>.</td></tr>
 </table></div>
 
 <h2 id="2-the-boot-shim-shim">2. The boot shim: <code>shim/</code></h2>
 <p>The shim is the small program the bootloader starts. It has its own copy of a few addresses, because it runs before any device tree is read:</p>
 <ul>
-<li><code>shim/console.h</code> and <code>shim/mmu.h</code>: the framebuffer address (<code>FB_BASE</code>, <code>FB_PHYS</code>).</li>
-<li><code>shim/shim.c</code>: <code>GICD_BASE</code>, <code>GICR_BASE</code>, the timer interrupts, <code>PSHOLD</code> (the reset register) and <code>IMEM_RESTART_REASON</code> (used to reboot into fastboot). Search live.dts for <code>restart@</code> / <code>qcom,pshold</code> and <code>restart_reason</code>.</li>
+<li><code>shim/console.h</code> and <code>shim/mmu.h</code>: the framebuffer address (<code>FB_BASE</code>, <code>FB_PHYS</code>) and the panel size (<code>FB_W</code> <code>1220</code>, <code>FB_H</code> <code>2712</code>, stride <code>FB_W * 4</code>).</li>
+<li><code>shim/shim.c</code>: <code>GICD_BASE</code>, <code>GICR_BASE</code>, <code>GICR_SIZE</code>, <code>GICR_PE_SIZE</code>, the timer interrupts (<code>VTIMER_INTID</code> <code>27</code>, <code>PTIMER_INTID</code> <code>30</code>), <code>IMEM_RESTART_REASON</code> and <code>PSHOLD</code>. On this phone the reset itself goes through <code>PSCI_SYSTEM_RESET</code>, and the restart reason is a scratch word at <code>0xa9000000</code> inside the RAM window.</li>
 <li><code>shim/build.sh</code>: the <code>mkbootimg</code> offsets and header version. Copy them from your stock boot.img: the unpack script prints its header with the load addresses and page size.</li>
 </ul>
-<p>Two kernel patches also draw on the screen very early, before the device tree is parsed: <code>0010-sweet-early-framebuffer-debug</code> and <code>0012-sweet-keep-debug-console-after-ttbr0</code>. They hard-code the framebuffer address and the 1080 x 2400 size. Change those too, or the early boot messages will land in the wrong place.</p>
+<p>Two kernel patches also draw on the screen very early, before the device tree is parsed: <code>0010-sweet-early-framebuffer-debug</code> and <code>0012-sweet-keep-debug-console-after-ttbr0</code>. They hard-code the framebuffer address and the panel size. Change those too, or the early boot messages will land in the wrong place.</p>
 
 <h2 id="3-the-board-drivers-xnu-patches">3. The board drivers: <code>xnu/patches/</code></h2>
 <p>The kernel is Apple's source plus a numbered series of patches that GitHub Actions applies in order. Most patches are generic. These are the ones that know about the board:</p>
 <div class="table-wrap"><table>
 <tr><th>Patch</th><th>What to check</th></tr>
-<tr><td><code>0060-sweet-keys-touch-drivers</code></td><td>Buttons: the PMIC bus (SPMI) addresses and the register offsets of the power key (PON) and volume keys. Touch: which I²C serial engine the touch chip hangs off, its I²C address, and its reset and interrupt GPIOs. Search live.dts for your touch chip's node (<code>goodix</code>, <code>focaltech</code>, <code>novatek</code>, <code>synaptics</code>, ...).</td></tr>
-<tr><td><code>0062-sweet-touch-power-battery</code></td><td>The power rail the touch chip needs (on sweet, regulator <code>ldoc11</code> voted through RPMh). Your phone's touch node names its supply, like <code>vdd-supply</code> or <code>avdd-name</code>.</td></tr>
-<tr><td><code>0063-sweet-goodix-geni-packing</code></td><td>The Goodix GT9896 touch protocol. A different touch chip needs a different protocol here. The Linux driver for your chip in the vendor kernel source shows the register layout.</td></tr>
-<tr><td><code>0061-sweet-iphone-x-display-size</code></td><td>Centers the real panel inside the 1125 x 2436 screen that iOS sees, and maps touch coordinates. Uses 1080 x 2400 in a few places.</td></tr>
-<tr><td><code>0072</code> to <code>0077</code> (USB)</td><td>Optional. The USB controller addresses for the live log over USB. You can skip these at first and read the log from recovery.</td></tr>
+<tr><td><code>0091-peridot-logical-display-and-peripheral-guard</code></td><td>Display: the kernel presents the iPhone X logical canvas (1125 x 2436) instead of the panel's native size, with signed centering offsets for the larger physical panel. It also adds the guard that refuses the SM7150 key, touch and USB probes on SM8635, because those registers mean something else here.</td></tr>
+<tr><td><code>0092-sweet-save-first-panic-to-ufs</code></td><td>Storage and diagnostics: the persistent console log, the first panic saved to UFS, and the optional <code>sweetpanicreset</code> / <code>sweetdiagreset</code> behaviour.</td></tr>
+<tr><td><code>0095-sweet-spmi-peridot-probe</code> and <code>0097-peridot-spmi-v7-keys</code></td><td>Buttons: the SPMI arbiter. This board uses the v7 arbiter, so the read command encoding and the address encoding differ from the older one. The key registers are the PMK8550 power/resin lines and a PMXR2230 GPIO, and the driver delivers them as HID consumer keys. The earlier sweet addresses must not be used.</td></tr>
+<tr><td><code>0098-peridot-geni-spi-goodix-probe</code></td><td>Touch: the serial engine. SE4 at <code>0xa90000</code>, the <code>qcom,cliffs-gcc</code> clock votes, the TLMM pin muxing for the four panel pins, and the Goodix BerlinD read protocol (F1 plus a big-endian address, three dummy bytes, then the data, with a checksum on the block).</td></tr>
+<tr><td><code>0101</code>, <code>0102</code>, <code>0103</code>, <code>0104</code> (GPI DMA)</td><td>Touch, second attempt: the GPI DMA transport over the same engine. A private, page-aligned arena holds the TX/RX rings and the event ring, the SMMU routes the DMA to it, and <code>0104</code> adds the bounded event trace and the timeout diagnostics. The transfer itself works; the completion event does not arrive yet.</td></tr>
+<tr><td><code>0108-peridot-bitbang-spi-and-touch-power</code></td><td>Touch, the simple path: the four panel pins are muxed back to plain GPIOs and driven by hand, which needs no DMA engine and no SMMU. The same patch votes the panel's rails (AVDD and IOVDD through RPMh) and sequences the reset on the panel's GPIO.</td></tr>
 </table></div>
-<p>The patches add new files to XNU, such as <code>bsd/dev/sweet_touch.c</code>. To change one, apply the series to an <code>xnu-8796</code> tree, edit the file, and regenerate that patch with <code>diff -u</code>. Before you spend a CI run, <code>tools/xnu-cc.py</code> can compile a single file locally using the commands from a previous CI log.</p>
+<p>The patches add new files to XNU, such as <code>bsd/dev/sweet_ufs.c</code> and <code>bsd/dev/sweet_spi_peridot.c</code>. To change one, apply the series to an <code>xnu-8796</code> tree, edit the file, and regenerate that patch with <code>diff -u</code>. Before you spend a CI run, <code>tools/xnu-cc.py</code> can compile a single file locally using the commands from a previous CI log.</p>
 
 <h2 id="4-boot-arguments">4. Boot arguments</h2>
-<p>The command line is baked into the payload by <code>tools/mkpayload.py</code> (see the README for the full line). For a first boot on a new phone, use <code>cpus=1</code>, and add <code>sweettouch=0 sweetkeys=0</code> until those drivers are adapted. Raise <code>cpus</code> once the kernel is stable.</p>
+<p>The command line is baked into the payload by <code>tools/mkpayload.py</code> (see the README for the full line). The ones that matter on this phone:</p>
+<div class="table-wrap"><table>
+<tr><th>Argument</th><th>What it does</th></tr>
+<tr><td><code>sweetdiagreset=N</code></td><td>Capture and reset after N seconds (30 to 3600). This is the timer that bounds a session and puts the machine back into the bootloader.</td></tr>
+<tr><td><code>sweetfb_noconsole=1</code></td><td>Pause the kernel text console once the display is up, so the UI is not covered in boot messages.</td></tr>
+<tr><td><code>sweetfb_native=1</code></td><td>Present the panel's native size instead of the iPhone X logical canvas.</td></tr>
+<tr><td><code>sweetfbshot=N</code></td><td>Take a read-only framebuffer snapshot after N seconds and write it into the console log, so the screen can be pulled out as a PNG.</td></tr>
+<tr><td><code>peridotspi=N</code></td><td>Select the touch diagnostic stage: 1 is the native serial-engine probe, 4 the GPI DMA diagnostics, 6 the bit-banged SPI transport.</td></tr>
+<tr><td><code>sweetkeys=0</code>, <code>sweettouch=0</code>, <code>sweetusb=0</code></td><td>Disable one driver, so the rest can be tested in isolation.</td></tr>
+<tr><td><code>cpus=N</code></td><td>How many cores to bring up. Start with 1 and raise it once the kernel is stable.</td></tr>
+</table></div>
 
 <h2 id="5-build-and-boot">5. Build and boot</h2>
-<p>From here the steps are the same as on sweet and are in the <a href="https://github.com/dipa-studio/ios-sweet#how-to-do-it-yourself">README</a>: build the kernel on GitHub Actions, build the iOS root image from the iPhone X IPSW, pack the boot image, flash the root to <code>userdata</code>, then <code>fastboot boot</code> the shim.</p>
-<p>Take it in stages. You can test the shim and kernel before you flash anything: boot the shim alone, and it prints its own diagnostics to the screen.</p>
+<p>The kernel is built by GitHub Actions, and the payload is the kernel plus the device tree plus the boot arguments:</p>
+<pre><code>python3 tools/mkpayload.py xnu/out-0107/kernel.development.sweet \
+    shim/out/peridot-0092-mac.adt shim/out/payload.bin --cmdline '...'
+bash shim/build.sh out/payload.bin</code></pre>
+<p><code>tools/peridot-cycle.py IMAGE OUT</code> then runs a whole session unattended: it backs up the boot control block, reboots into fastboot, boots the image temporarily, waits for the kernel to reset itself and pulls the console log back. Nothing is flashed, so the Android installation is still there afterwards; the iOS root volume in <code>userdata</code> is the exception, and it replaces Android's user data.</p>
+<p>Take it in stages. You can test the shim and kernel before anything is written: boot the shim alone, and it prints its own diagnostics to the screen.</p>
 <ol>
 <li><strong>Shim text on screen.</strong> Your framebuffer address is right.</li>
-<li><strong>Kernel messages scroll.</strong> Memory, interrupts and timer are right. If the phone reboots instantly, the memory range probably overlaps a protected carve-out.</li>
-<li><strong>The UFS driver finds the disk.</strong> Then iOS starts from <code>userdata</code>. This is the point where you flash the root image.</li>
-<li><strong>Apple logo, then the lock screen</strong> (after several minutes). Touch and buttons come last.</li>
+<li><strong>Kernel messages scroll.</strong> Memory, interrupts and the timer are right. If the phone reboots instantly, the memory range probably overlaps a protected carve-out.</li>
+<li><strong>The UFS driver finds the disk.</strong> Then iOS starts from <code>userdata</code>. This is the point where the iOS root volume has to be in place.</li>
+<li><strong>Apple logo, then the lock screen.</strong> The logical canvas has to be right, otherwise the display code loops instead of presenting frames.</li>
+<li><strong>Keys and touch come last.</strong> They arrive as HID events, and a key that reaches a live HID client is already a good sign.</li>
 </ol>
-<p>When something crashes, read the log from recovery with <code>tools/sweet-log-pull.sh</code>, and <code>tools/sweet-crash.py</code> turns crash reports into function names. <a href="https://github.com/dipa-studio/ios-sweet/blob/main/NOTES.md">NOTES.md</a> has every problem sweet ran into along the way, and most of them will show up on your phone too.</p>
+<p>When something crashes, the console log is on the device and <code>tools/peridot-cycle.py</code> pulls it; <code>tools/sweet-crash.py</code> symbolizes crash reports from the console log. <a href="https://github.com/Olegu621/xlamiOS/blob/main/NOTES.md">NOTES.md</a> has every problem the peridot port ran into along the way, and most of them will show up on your phone too.</p>
 
 <div class="note">
 <p>Got further on your phone? Post it on <a href="https://www.reddit.com/r/hackios/">r/hackios</a>. Which chip, which step you reached, and what you had to change helps everyone after you.</p>
 </div>
-<footer>hackiosx.dev documents the open-source <a href="https://github.com/dipa-studio/ios-sweet">ios-sweet</a> project. It is not affiliated with Apple. iOS is Apple's software and is not distributed here.</footer>
+<footer>This site documents the open-source <a href="https://github.com/Olegu621/xlamiOS">xlamiOS</a> project. It is not affiliated with Apple. iOS is Apple's software and is not distributed here.</footer>
 </div></main>
 <script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4da96b60d3fc2af',t:'MTc5MjUyNjIxNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>

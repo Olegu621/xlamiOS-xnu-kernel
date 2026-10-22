@@ -1,0 +1,212 @@
+diff --git a/bsd/dev/sweet_spi_peridot.c b/bsd/dev/sweet_spi_peridot.c
+index 7c38289..8d2ef1c 100644
+--- a/bsd/dev/sweet_spi_peridot.c
++++ b/bsd/dev/sweet_spi_peridot.c
+@@ -1,12 +1,20 @@
+-/* Peridot SE4 SPI / Goodix BerlinD diagnostic. Register definitions follow
++/* Peridot SE4 SPI / Goodix BerlinD driver. Register definitions follow
+  * Linux spi-geni-qcom, qcom-geni-se, Goodix Berlin and MiCode gcc-cliffs.
+- * Explicit peridotspi=1 only: no firmware writes, IRQ handler or reset.
+- * Run after UFS logging. FIFO transfers avoid DMA/SMMU dependencies.
++ * Explicit peridotspi=N only: no firmware or configuration uploads.
++ * Run after UFS logging.
++ *
++ * peridotspi=1  read-only engine probe over the serial engine FIFO
++ * peridotspi=3  read-only DMA readiness snapshot
++ * peridotspi=4  private GPI DMA transport, one transaction, diagnostics
++ * peridotspi=6  bit-banged SPI on the panel pins: power, probe, read-only
++ * peridotspi=7  the same, plus the touch poller that feeds the HID
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+@@ -14,6 +22,8 @@ void sweet_peridot_spi_init(void);
+ extern int sweet_peridot_touch_rail_enable(const char *, unsigned);
+ extern bool sweet_peridot_gpi_init(vm_offset_t);
+ extern bool sweet_peridot_gpi_transfer(const uint8_t *, uint8_t *, unsigned, bool);
++extern kern_return_t thread_terminate(thread_t);
++extern void sweet_hid_touch(int, int, int, int);
+ 
+ #define TP_MAX 1024u
+ #define TP_RCG 0x183c8u
+@@ -359,6 +369,126 @@ tp_power_on(void)
+ 	return true;
+ }
+ 
++/* ---- touch polling over the bit-banged SPI ---------------------------------- */
++
++#define TP_TOUCH_MAX 10
++#define TP_FRAME_LEN 90u
++static uint32_t tp_touch_addr;
++static bool tp_down[TP_TOUCH_MAX];
++static int tp_x[TP_TOUCH_MAX], tp_y[TP_TOUCH_MAX];
++static int tp_sleep_chan;
++
++/* The only device write: acknowledge the verified event-status byte. */
++static bool
++tp_ack(void)
++{
++	memset(tp_tx, 0, 5);
++	tp_tx[0] = 0xf0;
++	for (unsigned i = 0; i < 4; ++i) {
++		tp_tx[i + 1] = (uint8_t)(tp_touch_addr >> (24 - 8 * i));
++	}
++	return tp_transfer(5);
++}
++
++static void
++tp_release(void)
++{
++	for (unsigned i = 0; i < TP_TOUCH_MAX; ++i) {
++		if (tp_down[i]) {
++			sweet_hid_touch((int)i, 0, tp_x[i], tp_y[i]);
++			tp_down[i] = false;
++		}
++	}
++}
++
++/* Validate a complete frame before changing HID state. Unknown variable-size
++ * pen or key records are rejected, never interpreted with a finger stride. */
++static bool
++tp_decode(const uint8_t *b, unsigned len, bool seen[TP_TOUCH_MAX],
++    int x[TP_TOUCH_MAX], int y[TP_TOUCH_MAX])
++{
++	if (len < 8 || !(b[0] & 0x80) || !tp_checksum(b, 8)) {
++		return false;
++	}
++	unsigned n = b[2] & 15;
++	if (n > TP_TOUCH_MAX || (b[3] & 0x10) || len < 8 + n * 8 + (n ? 2 : 0) ||
++	    (n && !tp_checksum(b + 8, n * 8 + 2))) {
++		return false;
++	}
++	memset(seen, 0, TP_TOUCH_MAX * sizeof(*seen));
++	for (unsigned i = 0; i < n; ++i) {
++		const uint8_t *p = b + 8 + i * 8;
++		unsigned id = p[0] >> 4, type = p[0] & 15;
++		unsigned rawx = p[2] | p[3] << 8, rawy = p[4] | p[5] << 8;
++		if ((type != 0 && type != 2) || id >= TP_TOUCH_MAX || seen[id] ||
++		    rawx > 19520 || rawy > 43392) {
++			return false;
++		}
++		seen[id] = true;
++		x[id] = (int)(rawx / 16);
++		y[id] = (int)(rawy / 16);
++	}
++	return true;
++}
++
++static void
++tp_poll_thread(__unused void *arg, __unused wait_result_t result)
++{
++	uint8_t header[8], frame[TP_FRAME_LEN];
++	unsigned drops = 0, reports = 0;
++
++	for (;;) {
++		/* The status byte is the first byte of the report, so a short
++		 * read tells us whether there is anything new at all. */
++		if (tp_read(tp_touch_addr, header, sizeof(header)) && (header[0] & 0x80)) {
++			bool seen[TP_TOUCH_MAX];
++			int x[TP_TOUCH_MAX], y[TP_TOUCH_MAX];
++
++			if (!tp_read(tp_touch_addr, frame, sizeof(frame))) {
++				if (drops++ < 4) {
++					printf("PERIDOT TOUCH: frame read failed\n");
++				}
++			} else {
++				bool valid = tp_decode(frame, sizeof(frame), seen, x, y);
++				/* Acknowledge only after the frame was copied: a
++				 * failed ACK cannot leave contacts stuck. */
++				if (!tp_ack()) {
++					printf("PERIDOT TOUCH: event ACK failed; poller stopped\n");
++					break;
++				}
++				if (valid) {
++					reports++;
++					for (unsigned i = 0; i < TP_TOUCH_MAX; ++i) {
++						if (seen[i]) {
++							tp_x[i] = x[i];
++							tp_y[i] = y[i];
++							sweet_hid_touch((int)i, 1, x[i], y[i]);
++						} else if (tp_down[i]) {
++							sweet_hid_touch((int)i, 0, tp_x[i], tp_y[i]);
++						}
++						tp_down[i] = seen[i];
++					}
++				} else {
++					tp_release();
++					if (drops++ < 4) {
++						printf("PERIDOT TOUCH: dropped frame status=%#x count=%u\n",
++						    frame[0], frame[2] & 15);
++					}
++				}
++			}
++		}
++		uint64_t deadline;
++		clock_interval_to_deadline(8, NSEC_PER_MSEC, &deadline);
++		(void)assert_wait_deadline(&tp_sleep_chan, THREAD_UNINT, deadline);
++		thread_block(THREAD_CONTINUE_NULL);
++	}
++	printf("PERIDOT TOUCH: poller stopped after %u reports, %u dropped frames\n",
++	    reports, drops);
++	tp_release();
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
+ /* Read the chip description over the current transport. Read-only: the
+  * sensor is never reset, configured or flashed. */
+ static bool
+@@ -401,9 +531,11 @@ tp_probe_chip(void)
+ 	}
+ 	uint32_t addr = tp_info[off + 44] | (uint32_t)tp_info[off + 45] << 8 |
+ 	    (uint32_t)tp_info[off + 46] << 16 | (uint32_t)tp_info[off + 47] << 24;
++	unsigned head = tp_info[off + 48] | tp_info[off + 49] << 8;
++	unsigned point = tp_info[off + 50] | tp_info[off + 51] << 8;
++	tp_touch_addr = addr;
+ 	printf("PERIDOT SPI: IC_INFO len=%u checksum OK touch=%#x head=%u point=%u; read-only probe complete\n",
+-	    length, addr, tp_info[off + 48] | tp_info[off + 49] << 8,
+-	    tp_info[off + 50] | tp_info[off + 51] << 8);
++	    length, addr, head, point);
+ 	return true;
+ }
+ 
+@@ -421,7 +553,7 @@ sweet_peridot_spi_init(void)
+ 		tp_dma_profile();
+ 		return;
+ 	}
+-	if (probe == 6) {
++	if (probe == 6 || probe == 7) {
+ 		/* Bit-banged SPI: this serial engine cannot receive in FIFO
+ 		 * mode, so the four panel pins are driven as GPIOs and the
+ 		 * sensor is read over them. */
+@@ -438,7 +570,23 @@ sweet_peridot_spi_init(void)
+ 			printf("PERIDOT TOUCH: power/reset initialization failed\n");
+ 			return;
+ 		}
+-		(void)tp_probe_chip();
++		if (!tp_probe_chip()) {
++			return;
++		}
++		if (probe == 7) {
++			/* Only the layout the chip actually reported is used. */
++			if (tp_touch_addr != 0x10308) {
++				printf("PERIDOT TOUCH: unexpected touch address %#x; poller withheld\n",
++				    tp_touch_addr);
++				return;
++			}
++			thread_t thread;
++			if (kernel_thread_start(tp_poll_thread, NULL, &thread) == KERN_SUCCESS) {
++				printf("PERIDOT TOUCH: poller started at %#x\n", tp_touch_addr);
++			} else {
++				printf("PERIDOT TOUCH: poller could not be started\n");
++			}
++		}
+ 		return;
+ 	}
+ 	if (probe != 1 && probe != 4) {

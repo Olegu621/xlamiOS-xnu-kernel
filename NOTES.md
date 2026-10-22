@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> THIS CLONE IS THE PERIDOT PORT (POCO F6 / SM8635) — sweet notes below are HISTORY/REFERENCE (project paused ~2026-10-18) <<<
+## >>> xlamiOS: the PERIDOT port (POCO F6 / SM8635). The sweet notes below are HISTORY/REFERENCE. <<<
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
@@ -371,8 +371,8 @@ sensor. The recovery's real Goodix driver registers that input device.
   sweetdiagreset=60. A valid BERLIN version and a checksummed IC_INFO mean
   the transport works, and the touch poller candidate (spi.gpi-power-
   touch-candidate.c) can then be rebased onto it.
-- The project now lives in the public repository Olegu621/xnu-peridot-ios
-  (the whole history); Olegu621/ios-sweet stays as the legacy remote.
+- The project now lives in the public repository Olegu621/xlamiOS (the whole
+  history); Olegu621/ios-sweet stays as the legacy remote.
 
 - Further read-only recovery evidence: DMAengine summary shows a90000.spi on
   dma1chan0/1; gpi_dmaa00000_gpii0 IPC logs show routine successful Goodix
