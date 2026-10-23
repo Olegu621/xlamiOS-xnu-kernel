@@ -1,0 +1,14 @@
+name: peridot-hfi
+on:
+  push:
+    paths: ["tools/peridot-gmu/**", ".github/workflows/peridot-hfi.yml"]
+  workflow_dispatch:
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and check HFI transport
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all tools/peridot-gmu/peridot_hfi.c tools/peridot-gmu/test_hfi.c -o /tmp/check-hfi
+          /tmp/check-hfi
