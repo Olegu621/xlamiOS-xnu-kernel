@@ -4,6 +4,14 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0147 kernel ready; Mesa SDK API correction
+
+- Kernel CI40041887330/d585842 SUCCESS, artifact download in progress.
+- Mesa CI40042171921/a3bb4ba failed only at new source compilation:
+  iOS17.5 SDK deliberately rejects mach/mach_vm.h. Replaced with its supported
+  vm_region_64 / vm_address_t / vm_size_t API from mach/mach.h. Actual20H392
+  native binary exports vm_region_64. No false rendering claim; rebuild next.
+
 ### 0147 candidate: native CIF10 surface capability, exact-cache guard
 
 - Kernel CI40041887330/d585842 builds bounded raw chunks. New Mesa candidate

@@ -4,7 +4,6 @@
  * withhold that Apple-only surface capability. No executable page changes. */
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,12 +13,12 @@ extern const void *_dyld_get_shared_cache_range(size_t *length);
 
 static int writable_address(uintptr_t address)
 {
-    mach_vm_address_t region = address;
-    mach_vm_size_t bytes = 0;
+    vm_address_t region = address;
+    vm_size_t bytes = 0;
     vm_region_basic_info_data_64_t info;
     mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t object = MACH_PORT_NULL;
-    kern_return_t result = mach_vm_region(mach_task_self(), &region, &bytes,
+    kern_return_t result = vm_region_64(mach_task_self(), &region, &bytes,
         VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &object);
     if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
     return result == KERN_SUCCESS && address >= region && address - region < bytes &&
