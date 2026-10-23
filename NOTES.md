@@ -5,6 +5,29 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0143 IOKit BO/IOSurface frontend implemented;0142 compiled
+
+- CI40010486560 SUCCESS/48f2bb6 compiles persistent mode21 and real kernel
+  map/unmap/IB/fence APIs. Download/temporary180s hardware cycle follows.
+- New PeridotGPU/PeridotGPUUserClient matches IOResources only when mode21
+  is explicitly requested. Each operation checks actual hardware readiness;
+  no IOAcceleratorES/Metal identity is published.
+- Selectors10..16 match GLES: actual wired SG buffers, cached task mappings,
+  SweetSurface prepare/retain, CPU cache maintenance, per-client handles/
+  ranges, bounded IB input copy, real submission/fence wait, and completion/
+  TLBI before release. Unresolved descriptors remain pinned through reset.
+  Physical addresses only come from real kernel memory descriptors.
+- Managed buffers retain CPU cache mode, avoiding live physmap retyping.
+  Imported surfaces use actual descriptors, without substituting pixel copies.
+-0143 patch applies to unchanged IOKit files from0132. Initial host check
+  used the wrong local directory for KernelConfigTables.cpp; corrected check
+  now applies successfully with exact authored C++ contents. CI compilation
+  and real user-client behavior remain pending. One GPU address space is for
+  this trusted frontend; isolation/preemption/suspend remain future work.
+- Mesa compiled all1079 targets plus EAGL/frontend objects. Final link failed
+  for util_streaming_load_memcpy; actual ARM-compatible utility archive added.
+  Next candidate CI40011468254 buildsdeac84b and matches PeridotGPU.
+
 ### 0142 persistent engine and kernel BO/IB/fence API implemented
 
 - Mode21 retains actual OOB/GX/GMU clocks only after the proven CP/ZAP and
