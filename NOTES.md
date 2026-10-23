@@ -4,6 +4,58 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0117 + 0118 hardware results, and the AHB/GX correction (2026-10-23, autonomous)
+
+- 0117 (peridotgpu=5, image shim-boot-0117-aon.img sha256 8ad27746...,
+  cycle-0117-aon, 137364 bytes) ran the branch matrix. GPLL0 is locked and
+  output-on (GCC mode/opmode/state/status 0xe0000005/0/0x701/0). The vendor
+  always-on pair: cxo-aon 0x9004 still refused (before0, during0,
+  accepted0), demet 0x900c was already on (0x1). The configuration AHB gate
+  0x90c8 still refused (0/0). The HALT-class sibling cx-ff 0x90f8 DID
+  latch: before0x80000000, during0x80000001, accepted1, after0x80000000,
+  restored1. So XNU's cbcr read-modify-write path works and the refusal is
+  specific to those branches, not a global write-path failure.
+- 0118 (peridotgpu=6, CI run 39882987243 SUCCESS commit e16e428, kernel
+  sha256 9e864d41..., image shim-boot-0118-gx.img sha256 698abbdf...,
+  cycle-0118-gx, 134717 bytes) added a bounded GX pulse between two AHB
+  attempts. Handoff and live CX values reproduce 0116/0117 exactly
+  (CX0x22f801->0xf822f800, CX-hw0x2800010a->0x80000202, hub cfg0x503).
+  The control AHB attempt with CX only read back0 (as before). The GX
+  switch responded but did not complete: GX-gdscr 0x22f801 ->
+  0x6822f800 (bits30/29/27 set, bit0 cleared), GX-domain 0x9504 stayed
+  0x3c0001, and bit31 never set within the bounded50ms, so the retry with
+  GX live never ran; the stage reported GX_ON_TIMEOUT. After restoring
+  collapse the register read 0x6822f801, i.e. the higher status bits are
+  sticky and the stage's "restored" check (bit31 only) was too weak for
+  GX; the diagnostic reset followed anyway.
+- Reference correction, from the working HackiOS Adreno driver for the
+  same GPUCC family (redwood, a660): its device-tree entry for the 3D
+  core's power switch is commented "the GMU's to operate", and the driver
+  never powers GX from the CPU; the GMU firmware votes the gfx rail and
+  switches the core on (steps: clocks, CX, GMU memory/firmware/HFI). A
+  CPU-only GX pulse is therefore expected to time out, and the "AHB flop
+  sits in the GX rail" hypothesis cannot be tested without the GMU.
+- Same reference, about the AHB branch: "gpu_cc_ahb_clk ... reads0 on this
+  phone before and after its enable bit is written"; Linux has "no bit to
+  check" and just writes the bit and waits10us. Therefore 0x90c8 bit0
+  reading0 is NOT evidence that the configuration AHB clock is off: the
+  0115-0118 "gate refuses" conclusion is a false negative, and the
+  DELAY-class branch's bit31 halt status is equally uninformative. The
+  clock is to be treated as enabled by the write (0115 onwards).
+- Revised route: stop GPUCC power experiments and start the GMU bring-up
+  that the reference driver and the vendor gen7 sources describe (clocks,
+  CX, GMU reset and firmware, SMMU, HFI, then the GMU's request to power
+  the 3D core). The next diagnostic stage (0119) measures the GPUCC clocks
+  with the SoC's debug counter (GCC debug mux/counter, GPUCC debug mux)
+  instead of trusting branch readbacks, so the GMU work starts from a
+  measured clock state.
+- References supplied by the user: hoshikv/hackios-xnu-kernel (working
+  Adreno a660 bring-up, RedwoodGPU.cpp + bsd/dev/redwood_adreno.c),
+  hoshikv/kernel_xiaomi_sm8635 (upstream drm/msm tree: gpucc-cliffs.c has
+  no GDSC definitions, so the GPUCC power registers are driver-owned),
+  hoshikv/vendor_opensource-haptic-driver-peridot (AW8697 haptics, for a
+  later input stage, not GPU).
+
 ### 0116 hardware result + 0117 branch matrix (2026-10-23, autonomous)
 
 - CI run 39875590980 SUCCESS (commit 6443f04); kernel

@@ -144,6 +144,25 @@ as a shortcut.
    inventories; read-modify-write only, singles restored at once, the pair
    last, bounded10ms polls, no GMU, GPU core, SMMU, RCG, vote or firmware
    access.
+   **0118 / `peridotgpu=6`: GX switch responds but is the GMU's.**
+   After the CX hold and the hub RCG, a control AHB attempt was made, then
+   the GX domain was pulsed through its own GDSCR (0x9034, SW_COLLAPSE
+   only), then the AHB attempt was repeated. GX-gdscr went 0x22f801 ->
+   0x6822f800 (bits30/29/27 set, collapse cleared) but bit31, the power
+   status CX uses, never set within50ms: GX_ON_TIMEOUT, so the retry with
+   GX live never ran. The working HackiOS Adreno driver for this GPUCC
+   family documents that switch as "the GMU's to operate": the GMU
+   firmware votes the gfx rail and powers the 3D core, so a CPU-only pulse
+   is expected to time out. **Correction to 0115-0118:** the same driver
+   records that `gpu_cc_ahb_clk`'s enable bit "reads0 before and after its
+   enable bit is written" (Linux writes it and waits10us with no status
+   check); the configuration AHB clock is therefore treated as enabled by
+   the write, and the earlier "gate refuses" readings are a false
+   negative, as is any inference from that DELAY-class branch's halt bit.
+   The next stage measures the GPUCC clocks on the SoC debug counter
+   instead of trusting branch readbacks and starts the GMU bring-up
+   (clocks, CX, GMU reset/firmware, SMMU, HFI) rather than more GPUCC
+   power writes.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU
