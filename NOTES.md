@@ -4,6 +4,16 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0126 inactive table allocation and walk (2026-10-23)
+
+- New peridotgpu=12 path allocates separate physically contiguous16KiB
+  table/data pools using IOMallocContiguous, builds native4KiB stage1 tables
+  for IOVA0x4000..0x7fff, and independently walks all4 leaf translations.
+- Uses pinned MIT ArmSmmu4K builder. No SMMU/GMU MMIO or device submission;
+  both allocations retire after observation. Cache publication and live bank
+  activation are intentionally subsequent implementation steps.
+- Patch applies after0125. Compilation/hardware acceptance pending CI.
+
 ### SID5 preparation (2026-10-23)
 
 - Rechecked saved SCTLR: all22 banks have M=0. CR0.USFCFG=1:

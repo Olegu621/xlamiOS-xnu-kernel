@@ -1,0 +1,249 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -28,6 +28,53 @@
+ #include "sweet_gpu_power_peridot.h"
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_peridot_gpu_probe(void);
++
++
++/* Build and walk inactive native4K tables over owned physical allocations. */
++#include <IOKit/IOLib.h>
++#include "peridot_smmu4k.c"
++static void
++pgpu_prepare_tables(void)
++{
++    IOPhysicalAddress pool_pa = 0, data_pa = 0;
++    const vm_size_t bytes = 0x4000;
++    uint64_t *pool = IOMallocContiguous(bytes, bytes, &pool_pa);
++    void *data = IOMallocContiguous(bytes, bytes, &data_pa);
++    if (!pool || !data) {
++        printf("PERIDOT GPU: native4K allocation failed\n");
++        goto out;
++    }
++    bzero(pool, bytes);
++    bzero(data, bytes);
++    ArmSmmu4KConfig config = {32, 36, pool_pa, 4};
++    ArmSmmu4KRange range = {0x4000, data_pa, bytes,
++        ArmSmmu4KRead | ArmSmmu4KWrite, 0, 3};
++    ArmSmmu4KResult result;
++    ArmSmmu4KStatus status = ArmSmmu4KBuild(&config, &range, 1, pool, 4, &result);
++    bool valid = status == ArmSmmu4KSuccess;
++    for (unsigned page = 0; valid && page < 4; ++page) {
++        uint64_t iova = 0x4000 + page * 4096, table = result.root_physical;
++        for (unsigned level = result.start_level; level < 4; ++level) {
++            if (table < pool_pa || table - pool_pa > bytes - 4096) {
++                valid = false;
++                break;
++            }
++            unsigned shift = 12 + 9 * (3 - level);
++            uint64_t *entries = (uint64_t *)((char *)pool + (table - pool_pa));
++            uint64_t desc = entries[(iova >> shift) & 511];
++            if ((desc & 3) != 3) { valid = false; break; }
++            table = desc & UINT64_C(0x0000fffffffff000);
++            if (level == 3 && table != data_pa + page * 4096) valid = false;
++        }
++    }
++    printf("PERIDOT GPU: native4K inactive tables status=%u walk=%u pages=%lu leaves=%lu; no SMMU installation\n",
++        (unsigned)status, valid, (unsigned long)result.table_pages,
++        (unsigned long)result.leaf_pages);
++out:
++    /* No device ever receives these addresses, so both allocations can retire. */
++    if (data) IOFreeContiguous(data, bytes);
++    if (pool) IOFreeContiguous(pool, bytes);
++}
+ 
+ static uint32_t
+ pgpu_read(vm_offset_t base, unsigned off)
+@@ -354,10 +401,11 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
++	if (mode == 12) { pgpu_prepare_tables(); return; }
+ 	printf("PERIDOT GPU: read-only clock handoff; DT expects Adreno735 id=0x43030b00 gen7-11-0\n");
+ 	vm_offset_t gcc = ml_io_map(0x100000, 0x80000);
+ 	if (!gcc) {
+--- /dev/null
++++ b/bsd/dev/ArmSmmu4K.h
+@@ -0,0 +1,63 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef ARM_SMMU_4K_H
++#define ARM_SMMU_4K_H
++#include <stddef.h>
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef enum {
++    ArmSmmu4KSuccess = 0, ArmSmmu4KArgument, ArmSmmu4KBadRange,
++    ArmSmmu4KOverlap, ArmSmmu4KCapacity, ArmSmmu4KBudget,
++    ArmSmmu4KUnsupported, ArmSmmu4KStateMismatch,
++    ArmSmmu4KIoError, ArmSmmu4KTimeout, ArmSmmu4KBusy, ArmSmmu4KFault
++} ArmSmmu4KStatus;
++typedef struct {
++    unsigned input_bits;           /* 32..48, low-address TTBR0 profile. */
++    unsigned output_bits;          /* 32,36,40,42,44,48. */
++    uint64_t table_physical;        /* Caller-owned contiguous pool, aligned 4K. */
++    size_t leaf_budget;            /* Explicit upper bound on mapping work. */
++} ArmSmmu4KConfig;
++enum {ArmSmmu4KRead=1,ArmSmmu4KWrite=2,ArmSmmu4KExecute=4,ArmSmmu4KPrivileged=8};
++typedef struct {
++    uint64_t iova, physical, bytes;
++    unsigned permissions;          /* Read required; optional Write/Execute/Privileged. */
++    unsigned writeback;            /* 0=normal NC, 1=normal WB/WA. */
++    unsigned shareability;         /* 2=outer, 3=inner; explicit, no default. */
++} ArmSmmu4KRange;
++typedef struct {
++    uint64_t root_physical;
++    uint64_t mair;                 /* NC at index 0, WB/WA at index 1. */
++    size_t table_pages, leaf_pages;
++    unsigned start_level;
++    unsigned upper_region;        /* 0=Build TTBR0, 1=BuildUpper TTBR1. */
++} ArmSmmu4KResult;
++
++/* Build inactive ARM LPAE stage-1 tables with ONLY 4K level-3 leaves.
++ * Sorted disjoint low IOVA ranges; no sign extension or input conversion.
++ * No resource may map the table pool. Conflicting cache/shareability/privilege
++ * aliases refuse. Default 1/3 retains unprivileged PXN/UXN behavior. Execute
++ * and Privileged explicitly describe DEVICE-stage1 accesses (e.g. firmware),
++ * never CPU permissions or authorization to execute unauthenticated images.
++ * All validation/capacity checks precede table writes. Failure zeros result
++ * and leaves tables untouched. Success writes only result.table_pages pages.
++ * Caller guarantees real accessible, disjoint storage, immutable inputs,
++ * native-endian uint64_t table storage aligned to at least 8 bytes, actual
++ * physical ownership and matching CPU attributes/cache maintenance.
++ * NO MMIO, allocation, barriers, TLB operations or activation. This does NOT
++ * prove hardware support, coherent walks or a live isolated GPU context. */
++ArmSmmu4KStatus ArmSmmu4KBuild(const ArmSmmu4KConfig *config,
++    const ArmSmmu4KRange *ranges, size_t range_count, uint64_t *tables,
++    size_t table_capacity_pages, ArmSmmu4KResult *result);
++/* Same native 4K format for TTBR1's upper, sign-extended address region.
++ * IOVAs must already be in [2^64-2^input_bits,2^64); truncated low addresses
++ * refuse. Uses the architectural partial-root index width. No lower-region
++ * remapping, page-size conversion, MMIO or translation activation occurs. */
++ArmSmmu4KStatus ArmSmmu4KBuildUpper(const ArmSmmu4KConfig *config,
++    const ArmSmmu4KRange *ranges, size_t range_count, uint64_t *tables,
++    size_t table_capacity_pages, ArmSmmu4KResult *result);
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- /dev/null
++++ b/bsd/dev/peridot_smmu4k.c
+@@ -0,0 +1,111 @@
++/* SPDX-License-Identifier: MIT */
++#include "ArmSmmu4K.h"
++#define PAGE_BYTES UINT64_C(4096)
++#define ADDRESS_MASK UINT64_C(0x0000fffffffff000)
++
++static ArmSmmu4KStatus build_region(const ArmSmmu4KConfig *config,
++    const ArmSmmu4KRange *ranges, size_t range_count, uint64_t *tables,
++    size_t capacity, ArmSmmu4KResult *result, unsigned upper)
++{
++    if (!result) return ArmSmmu4KArgument;
++    result->root_physical = result->mair = 0;
++    result->table_pages = result->leaf_pages = result->start_level = 0;
++    result->upper_region = 0;
++    if (!config || !ranges || !range_count || !tables || !capacity ||
++        capacity > SIZE_MAX / PAGE_BYTES || range_count > SIZE_MAX / sizeof(*ranges) ||
++        config->input_bits < 32 || config->input_bits > 48 ||
++        !(config->output_bits == 32 || config->output_bits == 36 || config->output_bits == 40 ||
++          config->output_bits == 42 || config->output_bits == 44 || config->output_bits == 48) ||
++        !config->leaf_budget || config->leaf_budget > (SIZE_MAX - 1) / 3 ||
++        ((uintptr_t)tables & 7)) return ArmSmmu4KArgument;
++    if (range_count > config->leaf_budget) return ArmSmmu4KBudget;
++    uint64_t input_limit = UINT64_C(1) << config->input_bits;
++    uint64_t output_limit = UINT64_C(1) << config->output_bits;
++    uint64_t pool_bytes = (uint64_t)capacity * PAGE_BYTES;
++    uint64_t pool = config->table_physical;
++    if ((pool & 4095) || pool >= output_limit || pool_bytes > output_limit - pool)
++        return ArmSmmu4KBadRange;
++    size_t leaves = 0;
++    uint64_t previous_end = 0;
++    for (size_t i = 0; i < range_count; ++i) {
++        const ArmSmmu4KRange *r = &ranges[i];
++        if (!r->bytes || ((r->iova | r->physical | r->bytes) & 4095) ||
++            (!(r->permissions & ArmSmmu4KRead) || (r->permissions & ~15u)) || r->writeback > 1 || (r->shareability != 2 && r->shareability != 3) ||
++            r->physical >= output_limit || r->bytes > output_limit - r->physical)
++            return ArmSmmu4KBadRange;
++        if (upper ? (r->iova < UINT64_MAX-input_limit+1 || r->bytes-1 > UINT64_MAX-r->iova) :
++                    (r->iova >= input_limit || r->bytes > input_limit-r->iova))
++            return ArmSmmu4KBadRange;
++        if (i && r->iova <= previous_end) return ArmSmmu4KOverlap;
++        previous_end = r->iova + (r->bytes-1);
++        if (r->physical < pool + pool_bytes && pool < r->physical + r->bytes)
++            return ArmSmmu4KOverlap;
++        for (size_t j = 0; j < i; ++j) {
++            if ((r->writeback != ranges[j].writeback || r->shareability != ranges[j].shareability || ((r->permissions ^ ranges[j].permissions) & ArmSmmu4KPrivileged)) && r->physical < ranges[j].physical + ranges[j].bytes &&
++                ranges[j].physical < r->physical + r->bytes) return ArmSmmu4KOverlap;
++        }
++        uint64_t pages = r->bytes / PAGE_BYTES;
++        if (pages > config->leaf_budget - leaves) return ArmSmmu4KBudget;
++        leaves += (size_t)pages;
++    }
++    /* Each range has at least one leaf, so the validated leaf budget also
++     * bounds the range/alias loops. Sorted IOVAs make prefix counting exact. */
++    unsigned levels = (config->input_bits - 12 + 8) / 9;
++    unsigned start = 4 - levels;
++    size_t required = 1;
++    uint64_t last[3] = {UINT64_MAX, UINT64_MAX, UINT64_MAX};
++    for (size_t i = 0; i < range_count; ++i) {
++        for (uint64_t offset = 0; offset < ranges[i].bytes; offset += PAGE_BYTES) {
++            uint64_t va = ranges[i].iova + offset;
++            for (unsigned level = start; level < 3; ++level) {
++                uint64_t prefix = va >> (39 - 9 * level);
++                if (prefix != last[level]) { ++required; last[level] = prefix; }
++            }
++        }
++    }
++    if (required > capacity) return ArmSmmu4KCapacity;
++    for (size_t i = 0; i < required * 512; ++i) tables[i] = 0;
++    size_t next = 1;
++    for (size_t i = 0; i < range_count; ++i) {
++        const ArmSmmu4KRange *r = &ranges[i];
++        uint64_t attributes = (1u << 11) | (1u << 10) | 3;
++        if (!(r->permissions & ArmSmmu4KExecute)) attributes |= UINT64_C(3) << 53;
++        if (!(r->permissions & ArmSmmu4KPrivileged)) attributes |= 1u << 6;
++        if (!(r->permissions & ArmSmmu4KWrite)) attributes |= 1u << 7;
++        attributes |= (uint64_t)r->shareability << 8;
++        if (r->writeback) attributes |= 1u << 2;
++        for (uint64_t offset = 0; offset < r->bytes; offset += PAGE_BYTES) {
++            uint64_t va = r->iova + offset;
++            size_t table = 0;
++            for (unsigned level = start; level < 3; ++level) {
++                unsigned shift = 39-9*level;
++                unsigned width = level==start ? config->input_bits-shift : 9;
++                size_t slot = table * 512 + ((va >> shift) & ((1u<<width)-1));
++                if (!tables[slot]) tables[slot] = (pool + PAGE_BYTES * next++) | 3;
++                table = (size_t)(((tables[slot] & ADDRESS_MASK) - pool) / PAGE_BYTES);
++            }
++            tables[table * 512 + ((va >> 12) & 511)] = (r->physical + offset) | attributes;
++        }
++    }
++    result->root_physical = pool;
++    result->mair = 0xff44;
++    result->table_pages = required;
++    result->leaf_pages = leaves;
++    result->start_level = start;
++    result->upper_region = upper;
++    return ArmSmmu4KSuccess;
++}
++
++ArmSmmu4KStatus ArmSmmu4KBuild(const ArmSmmu4KConfig *config,
++    const ArmSmmu4KRange *ranges, size_t range_count, uint64_t *tables,
++    size_t capacity, ArmSmmu4KResult *result)
++{
++    return build_region(config,ranges,range_count,tables,capacity,result,0);
++}
++
++ArmSmmu4KStatus ArmSmmu4KBuildUpper(const ArmSmmu4KConfig *config,
++    const ArmSmmu4KRange *ranges, size_t range_count, uint64_t *tables,
++    size_t capacity, ArmSmmu4KResult *result)
++{
++    return build_region(config,ranges,range_count,tables,capacity,result,1);
++}
