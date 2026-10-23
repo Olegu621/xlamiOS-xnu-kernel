@@ -4,6 +4,22 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### Combined GMU boot: firmware transport (2026-10-23)
+
+- tools/mkpayload.py now accepts --gmu-firmware for the exact verified80680B
+  peridot image. Adds a reserved payload segment and /chosen/memory-map
+  PeridotGMUFirmware=(physical,actual-byte-count); does not use RAMDisk or
+  commit Qualcomm firmware bytes. Kernel_end covers the padded allocation.
+- Verified byte-identical legacy output without the option, exact firmware
+  payload bytes, ADT physical/size matching the segment, kernel_end coverage,
+  and refusal of a wrong firmware hash. This is host evidence only.
+- work/payload-gmu-transport.bin is a packing check against0129 kernel,
+  not a new GPU boot result. Driver consumption/loader/HFI startup remains
+  implementation work. Do not boot it expecting firmware startup.
+- HWSCHED queues:17 headers, header-table210 dwords, data starts byte848;
+  each queue4096B, dispatch priority layout4/4/3/2/1. The upstream3-queue
+  AdrenoHfi transport is not compatible without format/protocol adaptation.
+
 ### 0129 SID5 hardware PASS (2026-10-23)
 
 - CI39941940879 SUCCESS, b95a64c. Windows cycle0129 captured console.

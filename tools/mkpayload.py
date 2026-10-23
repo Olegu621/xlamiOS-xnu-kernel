@@ -122,13 +122,14 @@ def decode(raw, fmt, image_base):
     raise ValueError(f'unsupported chained pointer format {fmt}')
 
 
-def add_ramdisk_to_adt(adt_blob, phys, size):
+def add_ramdisk_to_adt(adt_blob, phys, size, name="RAMDisk"):
     """Return the ADT with /chosen/memory-map RAMDisk = <phys, size> (two uintptr_t)."""
     root, _ = adt.parse(adt_blob)
     chosen = next(c for c in root.children if c.name == 'chosen')
     mmap = next(c for c in chosen.children if c.name == 'memory-map')
-    assert mmap.prop('RAMDisk') is None, 'ADT already has a RAMDisk'
-    mmap.props.append(('RAMDisk', 0, struct.pack('<2Q', phys, size)))
+    if mmap.prop(name) is not None:
+        raise ValueError('ADT already has memory-map property ' + name)
+    mmap.props.append((name, 0, struct.pack('<2Q', phys, size)))
     return adt.serialize(root)
 
 
@@ -140,7 +141,7 @@ def adt_dram(adt_blob):
             struct.unpack('<Q', chosen.prop('dram-size'))[0])
 
 
-def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
+def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=None):
     buf = bytearray(open(kernel_path, 'rb').read())
     m = parse_macho(buf)
     nfix = apply_chained_fixups(buf, m)
@@ -168,6 +169,23 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
         adt_blob = add_ramdisk_to_adt(adt_blob, rd_pa, rd_size)
         ramdisk = (hex(rd_pa), hex(rd_size))
 
+    gmu_firmware = None
+    if gmu_firmware_path:
+        import hashlib
+        firmware = open(gmu_firmware_path, 'rb').read()
+        expected = '435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864'
+        if hashlib.sha256(firmware).hexdigest() != expected:
+            raise ValueError('GMU firmware differs from the verified peridot image')
+        fw_va = kernel_end
+        fw_size = (len(firmware) + PAGE - 1) & ~(PAGE - 1)
+        fw_pa = fw_va - virt_base + PHYS_BASE
+        if fw_pa < PHYS_BASE or fw_pa + fw_size > PHYS_BASE + MEM_SIZE:
+            raise ValueError('GMU firmware extends outside kernel-managed RAM')
+        kernel_end += fw_size
+        pieces.append((fw_va, fw_size, firmware))
+        adt_blob = add_ramdisk_to_adt(adt_blob, fw_pa, len(firmware), 'PeridotGMUFirmware')
+        gmu_firmware = (hex(fw_pa), len(firmware), expected)
+
     hdr_size = SEG_TABLE + 32 * len(pieces)
     out = bytearray(hdr_size)
     seg_table = []
@@ -188,7 +206,7 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     for i, t in enumerate(seg_table):
         struct.pack_into('<4Q', out, SEG_TABLE + 32 * i, *t)
     info = dict(cputype=hex(m['cputype']), cpusub=m['cpusub'], fixups=nfix, virt_base=hex(virt_base),
-                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, size=len(out),
+                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, gmu_firmware=gmu_firmware, size=len(out),
                 segs=[(s['name'], hex(s['vmaddr']), hex(s['vmsize'])) for s in segs])
     return bytes(out), info
 
@@ -198,8 +216,9 @@ if __name__ == '__main__':
     ap.add_argument('kernel'); ap.add_argument('adt'); ap.add_argument('out')
     ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
+    ap.add_argument('--gmu-firmware', help='verified peridot GMU image, carried as reserved payload memory')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
+    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk, a.gmu_firmware)
     open(a.out, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':
