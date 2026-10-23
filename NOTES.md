@@ -4,6 +4,17 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0136 combines privilege policy with the stock GMU context assignment
+
+- While0135 CI39980756339 was building, exact peridot-u-oss inspection also
+  established qcom_adreno_smmu_alloc_context_bank: GPU gets CB0/1; all other
+  clients start at CB2.0136 now assigns GMU SID5 to CB2/ASID3 and reads faults,
+  ACTLR, programs/disables/synchronizes that bank consistently. CB0/1 remain
+  available for the actual GPU submission driver. This is a source-matching
+  change, not a claim that using bank0 caused the observed permission fault.
+-0135's AP00/ACTLR corrections are included. Its older CI is superseded by
+  this combined build; no0135 device attempt. Build0136 uses the timed cycle.
+
 ### 0134 real GMU instruction-fetch permission fault;0135 privilege/policy (2026-10-23)
 
 - CI39978394149 SUCCESS/1133dee; imageSHA256
