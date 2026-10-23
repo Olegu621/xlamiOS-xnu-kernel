@@ -193,6 +193,7 @@ static void pgcb_faults(vm_offset_t gmu, vm_offset_t smmu, const char *phase)
         pgcb_read(smmu,0x20000 + pgcb.bank * 0x1000 + 0x58), (unsigned long long)far,
         pgcb_read(smmu,cb + 0x68));
     uint32_t fsr = pgcb_read(smmu,0x20000 + pgcb.bank * 0x1000 + 0x58), syn = pgcb_read(smmu,cb + 0x68);
+    if (!(fsr & 0xc00001feu)) return;
     printf("PERIDOT GMU: fault decode permission=%u translation=%u external=%u level=%u write=%u privileged=%u instruction=%u\n",
         !!(fsr & 8),!!(fsr & 2),!!(fsr & 16),syn & 3,
         !!(syn & 16),!!(syn & 32),!!(syn & 64));
@@ -230,6 +231,7 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
         h->memory[16],h->memory[17],h->memory[28],h->memory[29]);
     return false;
 }
+#include "peridot_hwsched_prepare.c"
 static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
 {
@@ -238,8 +240,11 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
      * starts non-GPU clients, including the GMU SID5, at context bank2. */
     pgcb.bank = 2;
     bool context = false, routed = false, released = false, exchanged = false;
+    bool prepared = false;
+    uint32_t mode = 0;
+    PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
     uint32_t saved_smr = 0, saved_s2cr = 0;
-    vm_offset_t gpu = 0, rsc = 0, pdc = 0;
+    vm_offset_t gpu = 0, rsc = 0, pdc = 0, cc = 0;
     ArmSmmu4KRange ranges[7];
     ArmSmmu4KConfig config = {32,36,0,129};
     ArmSmmu4KResult built = {0};
@@ -299,7 +304,8 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     if (pgcb_read(smmu,0xc00) != pgcb.bank || pgcb_read(smmu,0x800) != 0x80000005u) goto out;
     gpu = ml_io_map(0x3d00000,0x40000);
     rsc = ml_io_map(0x3d50000,0x10000); pdc = ml_io_map(0xb280000,0x10000);
-    if (!gpu || !rsc || !pdc || pgcb_read(rsc,0x101*4)) goto out;
+    if (mode == 18) cc = ml_io_map(0x3d90000,0xa000);
+    if (!gpu || !rsc || !pdc || (mode == 18 && !cc) || pgcb_read(rsc,0x101*4)) goto out;
     const uint32_t rsc_words[] = {4,11,14,13,16,15,18,17,256,8,9,10,340,341,342,343,344};
     const uint32_t rsc_values[] = {1u<<24,1,0,0,0,0,0x80000021,0,0,
         0x4520,0x4510,0x4514,0xeaaae5a0,0xe1a1ebab,0xa2e0a581,0xecac82e2,0x0020edad};
@@ -335,9 +341,17 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     bool hfi_ready = pgcb_poll(gmu,0x1f980*4-0x68000,1,1,200000);
     printf("PERIDOT GMU: HFI control ready=%u\n",hfi_ready);
     if (hfi_ready) exchanged = pgcb_exchange(&hfi,gmu,smmu);
+    if (exchanged && mode == 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
 out:
     pgcb_faults(gmu,smmu,"before stop");
     if (released) {
+        if (mode == 18) {
+            uint32_t gx = pgcb_read(cc,PGPU_GX_GDSCR);
+            printf("PERIDOT HWSCHED: prepare=%u GX-GDSCR=%#x collapsed=%u\n",
+                prepared,gx,pgpu_collapsed(gx));
+            if (!pgpu_collapsed(gx))
+                panic("PERIDOT HWSCHED unexpected active GX; retaining clocks and mappings");
+        }
         pgcb_gwrite(gmu,0x1f800,1);
         if (!pgcb_poll(gmu,0x1f800*4-0x68000,UINT32_MAX,1,10000))
             panic("PERIDOT GMU reset unconfirmed; retaining memory and clocks");

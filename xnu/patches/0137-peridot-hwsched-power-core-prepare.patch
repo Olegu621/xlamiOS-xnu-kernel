@@ -1,0 +1,275 @@
+--- a/bsd/dev/peridot_gmu_coldboot.c
++++ b/bsd/dev/peridot_gmu_coldboot.c
+@@ -193,6 +193,7 @@
+         pgcb_read(smmu,0x20000 + pgcb.bank * 0x1000 + 0x58), (unsigned long long)far,
+         pgcb_read(smmu,cb + 0x68));
+     uint32_t fsr = pgcb_read(smmu,0x20000 + pgcb.bank * 0x1000 + 0x58), syn = pgcb_read(smmu,cb + 0x68);
++    if (!(fsr & 0xc00001feu)) return;
+     printf("PERIDOT GMU: fault decode permission=%u translation=%u external=%u level=%u write=%u privileged=%u instruction=%u\n",
+         !!(fsr & 8),!!(fsr & 2),!!(fsr & 16),syn & 3,
+         !!(syn & 16),!!(syn & 32),!!(syn & 64));
+@@ -230,6 +231,7 @@
+         h->memory[16],h->memory[17],h->memory[28],h->memory[29]);
+     return false;
+ }
++#include "peridot_hwsched_prepare.c"
+ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
+     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
+ {
+@@ -238,8 +240,11 @@
+      * starts non-GPU clients, including the GMU SID5, at context bank2. */
+     pgcb.bank = 2;
+     bool context = false, routed = false, released = false, exchanged = false;
++    bool prepared = false;
++    uint32_t mode = 0;
++    PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+     uint32_t saved_smr = 0, saved_s2cr = 0;
+-    vm_offset_t gpu = 0, rsc = 0, pdc = 0;
++    vm_offset_t gpu = 0, rsc = 0, pdc = 0, cc = 0;
+     ArmSmmu4KRange ranges[7];
+     ArmSmmu4KConfig config = {32,36,0,129};
+     ArmSmmu4KResult built = {0};
+@@ -299,7 +304,8 @@
+     if (pgcb_read(smmu,0xc00) != pgcb.bank || pgcb_read(smmu,0x800) != 0x80000005u) goto out;
+     gpu = ml_io_map(0x3d00000,0x40000);
+     rsc = ml_io_map(0x3d50000,0x10000); pdc = ml_io_map(0xb280000,0x10000);
+-    if (!gpu || !rsc || !pdc || pgcb_read(rsc,0x101*4)) goto out;
++    if (mode == 18) cc = ml_io_map(0x3d90000,0xa000);
++    if (!gpu || !rsc || !pdc || (mode == 18 && !cc) || pgcb_read(rsc,0x101*4)) goto out;
+     const uint32_t rsc_words[] = {4,11,14,13,16,15,18,17,256,8,9,10,340,341,342,343,344};
+     const uint32_t rsc_values[] = {1u<<24,1,0,0,0,0,0x80000021,0,0,
+         0x4520,0x4510,0x4514,0xeaaae5a0,0xe1a1ebab,0xa2e0a581,0xecac82e2,0x0020edad};
+@@ -335,9 +341,17 @@
+     bool hfi_ready = pgcb_poll(gmu,0x1f980*4-0x68000,1,1,200000);
+     printf("PERIDOT GMU: HFI control ready=%u\n",hfi_ready);
+     if (hfi_ready) exchanged = pgcb_exchange(&hfi,gmu,smmu);
++    if (exchanged && mode == 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
+ out:
+     pgcb_faults(gmu,smmu,"before stop");
+     if (released) {
++        if (mode == 18) {
++            uint32_t gx = pgcb_read(cc,PGPU_GX_GDSCR);
++            printf("PERIDOT HWSCHED: prepare=%u GX-GDSCR=%#x collapsed=%u\n",
++                prepared,gx,pgpu_collapsed(gx));
++            if (!pgpu_collapsed(gx))
++                panic("PERIDOT HWSCHED unexpected active GX; retaining clocks and mappings");
++        }
+         pgcb_gwrite(gmu,0x1f800,1);
+         if (!pgcb_poll(gmu,0x1f800*4-0x68000,UINT32_MAX,1,10000))
+             panic("PERIDOT GMU reset unconfirmed; retaining memory and clocks");
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -17,7 +17,10 @@
+  * Mode10's first attempt died on SMR[24]; mode11 repeats the inventory with
+  * every array bounded by the SMMU ID registers (sIDR0 NUMSMRG, sIDR1 NUMCB)
+  * and also reports the post-stage vote/gate state.
+- * No firmware load, GPU core access, GMU/SMMU writes.
++ * Modes12..16 prepare/check owned translation and firmware storage.
++ * Mode17 cold-boots GMU and verifies a matching HFI response.
++ * Mode18 also sends board power tables and prepares HWSCHED core services.
++ * Actual GPU submissions and rendering require the following driver phases.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -168,7 +171,7 @@
+     AdrenoFirmwareResult parsed = AdrenoFirmwarePlanGmu(fw, length, regions, 4, blocks, 32, &count);
+     printf("PERIDOT GPU: boot bundle firmware parse=%u records=%lu\n", (unsigned)parsed, (unsigned long)count);
+     if (parsed != AdrenoFirmwareSuccess || count != 15) return;
+-    if (mode == 17) { pgpu_coldboot(gmu, smmu, fw, blocks, count); return; }
++    if (mode == 17 || mode == 18) { pgpu_coldboot(gmu, smmu, fw, blocks, count); return; }
+     IOPhysicalAddress hfi_pa = 0;
+     const vm_size_t allocation = 0x14000;
+     uint32_t *shared = pgpu_allocate(allocation, 0x4000, &hfi_pa);
+@@ -617,7 +620,7 @@
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
+ 	uint32_t bundle = 0;
+ 	PE_parse_boot_argn("peridotgpu", &bundle, sizeof(bundle));
+-	if (bundle == 16 || bundle == 17) pgpu_boot_bundle(ctx->gmu.base, ctx->smmu.base, bundle);
++	if (bundle == 16 || bundle == 17 || bundle == 18) pgpu_boot_bundle(ctx->gmu.base, ctx->smmu.base, bundle);
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if (mode == 13 || mode == 14 || mode == 15 || mode == 16) {
+@@ -639,7 +642,7 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15 && mode != 16 && mode != 17) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15 && mode != 16 && mode != 17 && mode != 18) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -1039,8 +1042,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17) {
+-		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17);
++	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18) {
++		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18);
+ 		uint32_t reset = 0, manual = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		PE_parse_boot_argn("peridotmanual", &manual, sizeof(manual));
+--- /dev/null
++++ b/bsd/dev/peridot_hwsched_prepare.c
+@@ -0,0 +1,107 @@
++/* SPDX-License-Identifier: MIT */
++/* HFI2.6.1 configuration phase, before START's memory requests and GPU OOB.
++ * qualcomm-linux/kgsl 2b2d762c0b843c560d2ae2203f6b3cfe1474fb3f:
++ * adreno_gen7_hfi.c and adreno_gen7_hwsched_hfi.c. */
++#include "peridot_power_tables.h"
++
++static bool pgcb_request(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
++    const uint32_t *source, size_t count, unsigned *sequence,
++    bool zero_result, uint32_t *value, uint32_t *error)
++{
++    uint32_t wire[255];
++    *value = *error = UINT32_MAX;
++    if (!source || !count || count > 255 || *sequence >= 4095 ||
++        ((source[0] >> 8) & 255) != count || (source[0] & 0xffff0000u)) return false;
++    bcopy(source,wire,count * sizeof(uint32_t));
++    wire[0] |= ++*sequence << 20;
++    enum pg_hfi_status sent = pg_hfi_send(h,wire,count);
++    printf("PERIDOT HWSCHED: command=%u sequence=%u words=%lu publish=%u\n",
++        wire[0] & 255,*sequence,(unsigned long)count,sent);
++    if (sent != PG_HFI_OK) return false;
++    unsigned messages = 0;
++    for (unsigned poll = 0; poll < 100000; ++poll) {
++        uint32_t packet[255]; size_t words = 0;
++        enum pg_hfi_status status = pg_hfi_receive(h,1,packet,255,&words);
++        if (status == PG_HFI_OK) {
++            if (++messages > 64) return false;
++            if (((packet[0] >> 16) & 15) == 1) {
++                if (words < 4 || packet[1] != wire[0]) {
++                    printf("PERIDOT HWSCHED: ACK mismatch words=%lu expected=%#x received=%#x\n",
++                        (unsigned long)words,wire[0],words > 1 ? packet[1] : 0);
++                    return false;
++                }
++                *value = packet[2]; *error = packet[3];
++                printf("PERIDOT HWSCHED: ACK command=%u result=%#x error=%u\n",
++                    wire[0] & 255,*value,*error);
++                return !*error && (!zero_result || !*value);
++            }
++            printf("PERIDOT HWSCHED: asynchronous message id=%u words=%lu data=%#x/%#x\n",
++                packet[0] & 255,(unsigned long)words,
++                words > 1 ? packet[1] : 0,words > 2 ? packet[2] : 0);
++            /* START is a later phase. No memory allocation is acknowledged
++             * here without a real backed GMU/GPU mapping and descriptor. */
++            if ((packet[0] & 255) != 101) return false;
++        } else if (status != PG_HFI_EMPTY) return false;
++        status = pg_hfi_receive(h,2,packet,255,&words);
++        if (status == PG_HFI_OK) {
++            if (++messages > 64) return false;
++            printf("PERIDOT HWSCHED: debug id=%u words=%lu data=%#x\n",
++                packet[0] & 255,(unsigned long)words,words > 1 ? packet[1] : 0);
++            if ((packet[0] & 255) == 100) return false;
++        } else if (status != PG_HFI_EMPTY) return false;
++        if (pgcb_read(smmu,0x48) ||
++            (pgcb_read(smmu,0x20000 + pgcb.bank*0x1000 + 0x58) & 0xc00001feu) ||
++            (pgcb_gread(gmu,0x1f992) & (1u<<15))) return false;
++        pgcb_gwrite(gmu,0x1f991,pgcb_gread(gmu,0x1f992));
++        delay(10);
++    }
++    printf("PERIDOT HWSCHED: command=%u timed out; cmd rd/wr=%u/%u response rd/wr=%u/%u\n",
++        wire[0] & 255,h->memory[16],h->memory[17],h->memory[28],h->memory[29]);
++    return false;
++}
++
++static bool pgcb_hwsched_prepare(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
++{
++    unsigned sequence = 1, acknowledged = 0;
++    uint32_t value = 0, error = 0;
++    if (pgcb_read(gmu,0xcff0) != 0x20060001) {
++        printf("PERIDOT HWSCHED: exact HFI2.6.1 configuration required\n"); return false;
++    }
++    printf("PERIDOT HWSCHED: prepare actual peridot PERF49/BW160, HFI2.6.1\n");
++    if (!pgcb_request(h,gmu,smmu,pgcb_performance,
++        sizeof(pgcb_performance)/sizeof(pgcb_performance[0]),&sequence,true,&value,&error)) return false;
++    ++acknowledged;
++    if (!pgcb_request(h,gmu,smmu,pgcb_bandwidth,
++        sizeof(pgcb_bandwidth)/sizeof(pgcb_bandwidth[0]),&sequence,true,&value,&error)) return false;
++    ++acknowledged;
++    /* GX OOB, CP/SQE/ZAP and the memory-request phase follow separately.
++     * Keep IFPC off until that driver owns GX power and its idle protocol. */
++    const uint32_t features[][4] = {
++        {11u | (4u<<8),9,0,0},
++        {11u | (4u<<8),1,1,0},
++        {11u | (4u<<8),16,1,0},
++        {11u | (4u<<8),27,1,0},
++    };
++    for (unsigned i = 0; i < sizeof(features)/sizeof(features[0]); ++i) {
++        bool ok = pgcb_request(h,gmu,smmu,features[i],4,&sequence,true,&value,&error);
++        if (!ok && features[i][1] == 27 && error == 8) {
++            printf("PERIDOT HWSCHED: DMS unavailable, matching KGSL optional-feature fallback\n");
++            continue;
++        }
++        if (!ok) return false;
++        ++acknowledged;
++    }
++    const uint32_t core_start[] = {14u | (2u<<8),0};
++    if (!pgcb_request(h,gmu,smmu,core_start,2,&sequence,true,&value,&error)) return false;
++    ++acknowledged;
++    const uint32_t properties[] = {121,122};
++    for (unsigned i = 0; i < sizeof(properties)/sizeof(properties[0]); ++i) {
++        uint32_t query[] = {12u | (3u<<8),properties[i],0};
++        if (!pgcb_request(h,gmu,smmu,query,3,&sequence,false,&value,&error)) return false;
++        printf("PERIDOT HWSCHED: capability=%u value=%#x\n",properties[i],value);
++        ++acknowledged;
++    }
++    printf("PERIDOT HWSCHED: core preparation acknowledged=%u; START/GPU submission pending\n",
++        acknowledged);
++    return true;
++}
+--- /dev/null
++++ b/bsd/dev/peridot_power_tables.h
+@@ -0,0 +1,51 @@
++/* SPDX-License-Identifier: MIT */
++/* Peridot SM8635/Adreno735 board configuration, captured2026-10-23.
++ * GPU/GMU OPPs and bus levels: live device tree.
++ * ARC/BCM units/addresses/widths/VCDs: actual AOP CMD-DB.
++ * Encoding: Qualcomm gen7_rpmh/adreno_rpmh; Linux v6.12 qcom/tcs.h.
++ * CMD-DB SHA256: 8d50688bf9ef7c6f68f382ee6c87518db265e113ed5a510b27d5fcc76bf74679
++ * Device-tree archive SHA256: 762c290728b7c91e13ad57fb5cfe3a7d39b344e95e9aaa7d8219ff01f44ed5c5 */
++#ifndef PERIDOT_POWER_TABLES_H
++#define PERIDOT_POWER_TABLES_H
++#include <stdint.h>
++static const uint32_t pgcb_performance[] = {
++    0x0000310fu,0x00000000u,0x00000001u,0x0000000cu,0x00000003u,0x00000000u,
++    0xffffffffu,0x00000000u,0x00380201u,0xffffffffu,0x0003e418u,0x00400202u,
++    0xffffffffu,0x000562e8u,0x00800303u,0xffffffffu,0x0007a120u,0x00c00404u,
++    0xffffffffu,0x0009a8a8u,0x00e00505u,0xffffffffu,0x000a6fe0u,0x01000606u,
++    0xffffffffu,0x000b3b00u,0x01400707u,0xffffffffu,0x000cbdb8u,0x01800808u,
++    0xffffffffu,0x000dbba0u,0x01900909u,0xffffffffu,0x000e7ef0u,0x01a0090au,
++    0xffffffffu,0x000f4240u,0x01b0090bu,0xffffffffu,0x0010c8e0u,0x00000003u,
++    0x00000002u,0x00000000u,0x00000000u,0x00400202u,0x00035b60u,0x00800303u,
++    0x00086470u,
++};
++static const uint32_t pgcb_bandwidth[] = {
++    0x0000a003u,0x0000000au,0x00000001u,0x00000003u,0x00000001u,0x00000007u,
++    0x00050030u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x40000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x60004001u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00050004u,0x00050000u,0x00050068u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x40000000u,0x40000000u,0x40000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x61fc87f2u,0x61fc87f2u,
++    0x60000008u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x62ca4b29u,0x62ca4b29u,0x60000008u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x65a61698u,0x65a61698u,0x60000008u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x663498d2u,0x663498d2u,
++    0x60000008u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x67999e66u,0x67999e66u,0x60000008u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x69f0a7c2u,0x69f0a7c2u,0x60000008u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x6b942e50u,0x6b942e50u,
++    0x60000008u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x6d643590u,0x6d643590u,0x60000008u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x6f58bd62u,0x6f58bd62u,0x60000008u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++    0x00000000u,0x00000000u,0x00000000u,0x00000000u,
++};
++#endif

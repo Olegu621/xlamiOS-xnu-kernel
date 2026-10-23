@@ -4,6 +4,25 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0137 HWSCHED configuration/core preparation (implementation ready)
+
+- Mode18 retains the proven0136 cold boot/GET_VALUE ACK, then submits actual
+  peridot HFI2.6.1 PERF49 and BW160 packets, IFPC-disable, HWSCHED/KPROF/DMS
+  features and CORE_FW_START. Queries real context-queue121/GMU_AB122 values.
+  Matching request echo,4-word ACK, returned result AND v5 firmware-error
+  field are checked. DMS NO_ENTRY8 follows KGSL's optional-feature fallback.
+- No START10 or GPU OOB is issued yet: those phases need actual memory-request
+  replies and the GPU's own mappings/SQE/ZAP/CP initialization. Unexpected
+  allocation requests fail with their real message logged; no invented ACK.
+- Normal-CX cleanup remains bounded; mode18 verifies GX still collapsed before
+  returning clocks to the parent stage. Unexpected active GX panics with
+  clocks/mappings retained. Fault syndrome decoded only with real fault flags.
+- Peridot board power header contains only the operational derived tables and
+  input provenance hashes. Firmware/device dumps/serials remain outside Git.
+-0137 patch structurally applies to the exact0136 source baseline. Kernel
+  compilation and actual command ACKs pending. This does not complete GPU
+  acceleration; goal remains real GPU commands plus Mesa/CA rendering.
+
 ### 0136 HARDWARE PASS: real GMU firmware and matching HFI ACK
 
 - CI39981109143 SUCCESS/f4a952f, imageSHA256
