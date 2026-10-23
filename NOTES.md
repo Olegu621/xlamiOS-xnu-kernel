@@ -4,6 +4,30 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0139 HARDWARE PASS: full START and ten real allocations
+
+- CI39987869394 SUCCESS/6a0549b. ImageSHA256
+  deb475573ff0e0402ad3b396e497896ca01e85551f182734cf07d424104902d6.
+  cycle0139 returned automatically at180s; consoleSHA256
+  6f2b835121ca65deee6a0e6141be0fa9a62c8536d6d29fba21fcf0134e13866e.
+- All9 preparation ACKs repeated. Actual START requested version1 objects:
+  kinds2/14/15/16/1/3/4/5/7/24, handles2/14/15/16/26/3/4/5/7/24.
+ 10 real backed objects total0x23c000B; all exact replies sent after mappings.
+  Actual3-word START ACK/result0, prepare=1/START=1. No MMIO request occurred.
+- GMU live translations accepted; inactive GPU root0x8c3f34000. GPU mappings
+  are constructed/read back but not hardware-consumed yet; CB0/1 still unused.
+  Secure-kind5 reported its actual non-secure4KiB fallback and firmware accepted
+  it. No fake secure memory or host-only ACK was used.
+- GX remained collapsed, GFSR0/FSR0x400, reset/drain/disable/TLB sync passed.
+  No panic. iOS userland/framebuffer continued, touch694 reports/drops0.
+- Next: prepare actual SQE buffer/SMMU information, GPU's own context and
+  power/OOB, CP initialization via HFI131, real memory-write/fence, then Mesa.
+  Current Qualcomm SMMU-info struct includes a context-bank field, but shipped
+  firmware requests24bytes; verify the older/peridot contract before filling it.
+- Actual captured GMU DT qcom,ipc-core is physical0x400000/size0x140000.
+  Reserve this fact for genuine future MMIO requests; no resource mapped yet.
+  sweetgl frontend files fetched at pinned d7a74344828c into local work folder.
+
 ### Verified SQE/ZAP boot transport prepared (host only)
 
 - tools/mkpayload.py accepts optional --sqe-firmware/--zap-firmware alongside

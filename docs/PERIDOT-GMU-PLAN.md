@@ -125,3 +125,21 @@ inactive GPU root for the future GPU boot. Existing translations stay intact;
 each new VA is advertised only after its backing and translation are published.
 Unknown platform resources are refused. GPU OOB/SQE/ZAP/CP and rendered iOS
 frames are still future phases;0139 compilation and hardware behavior pending.
+
+### 0139 START accepted with ten actual backed objects
+
+[CI39987869394](https://github.com/Olegu621/xlamiOS-xnu-kernel/actions/runs/39987869394)
+built successfully. Firmware requested ten version1 allocations (scratch,
+profiling, command buffers, ring, SMMU information, preemption records/counter
+and scratch), totaling0x23c000 bytes of reported backing. Every reply followed
+real allocation/mapping and bounded GMU ASID synchronization. Firmware then
+returned the exact three-word START ACK with result0. The non-secure fallback
+for the unused secure preemption slot was also accepted. No MMIO request
+occurred. GX stayed collapsed; reset/drain/context shutdown completed without
+a fault or panic. The180s cycle returned to recovery and captured the console.
+
+The GPU root and its mappings remain inactive; this is not GPU command
+completion. The shipped firmware asks for24-byte SMMU information, while newer
+Qualcomm source adds a context-bank field; match that contract before GPU boot.
+SQE upload, GPU context/power, CP initialization, a real memory write/fence and
+the Mesa/IOSurface path remain required.
