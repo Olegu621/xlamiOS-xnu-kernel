@@ -4,6 +4,27 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0136 HARDWARE PASS: real GMU firmware and matching HFI ACK
+
+- CI39981109143 SUCCESS/f4a952f, imageSHA256
+  465ad8b6a8caa0b63d9523f1a4533b84c533cbad8f7e48c67fb112c44f461549.
+  cycle0136 automatically returned to recovery and captured console.
+- GMU CB2/ASID3 ACTLR0x32b readback matches. Full129-leaf native4K map,
+ 135TCM words/79900 external bytes readback, SCM availability/GPU_INIT pass.
+- CM3 FW_INIT=0x100, HFI control1, GFSR0, FSR0x400 (FORMAT2; no fault bits).
+  FAR/FSYNR contain undefined old data when no fault; do not interpret them.
+- GET_VALUE125 was actually published. Real reply4words:
+  header0x1040c, echoed request0x10030c, value1. Matching ACK recognized.
+  Warmboot capability is reported by this firmware, not inferred from source.
+- CM3 reset, GBIF ARB halt, context disable/TLB sync all verified. Saved
+  configuration restored, all backing remains pinned until reboot. No panic.
+- This proves real firmware instruction execution, translated DMA and HFI
+  communication. GPU command completion and accelerated iOS are NOT proven.
+- Next: actual HWSCHED startup using the already-derived actual-board PERF49
+  and BW160-dword tables, feature ACKs/core start, proper allocation replies,
+  matching SQE/ZAP/GX/CP startup, a real GPU memory-write/fence, then Mesa/CA.
+- CI39980756339 was superseded; no0135 boot. Active source has0135+0136.
+
 ### 0136 combines privilege policy with the stock GMU context assignment
 
 - While0135 CI39980756339 was building, exact peridot-u-oss inspection also

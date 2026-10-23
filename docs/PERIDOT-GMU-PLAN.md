@@ -73,3 +73,15 @@ packet and160-dword bandwidth packet have been derived, including actual
 SH0/MC0/ACV/CN0 addresses, units, widths and VCD grouping. They have not been
 sent to the device. HWSCHED startup/memory replies, GPU command completion and
 Mesa/IOSurface rendering remain required for hardware acceleration.
+
+
+### 0136 hardware acceptance
+
+[CI39981109143](https://github.com/Olegu621/xlamiOS-xnu-kernel/actions/runs/39981109143)
+built successfully. The timed device cycle verified CB2/ASID3/ACTLR0x32b,
+FW_INIT0x100 and HFI control1, then sent GET_VALUE125. The real4-word reply
+has header0x1040c, echoed request0x10030c and value1. This is real firmware
+execution and HFI communication. FSR0x400 denotes FORMAT2 with no fault flags;
+FAR/FSYNR must not be interpreted in that state. Reset, bus halt and context
+shutdown completed and recovery returned automatically. GPU command execution
+and accelerated iOS rendering remain required.
