@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0128 hardware and 0129 route preparation (2026-10-23)
+
+- CI39940642998 SUCCESS,8a395c2. Image SHA256
+  13f401f3e91a432aea1cc315c6c9e97c8c9110abdf21ded24965b6016940397e.
+- cycle0128: program0/phase5/enabled1/readback1/writes13; disable0,
+  disabled_verified1/sync1/retain0. FSR read0x400 (outside library's
+  architectural fault mask); do not describe raw fault register as zero.
+  SMMU/clock stage PASS; automatic recovery return and console capture.
+- 0129 mode15 attaches exact SID5/SMR0 to active bank0 only with the same
+  exclusive-idle/CM3-reset preconditions. Captures SMR/S2CR/GFSR readback,
+  quarantines route, invalidates SMR, disables/syncs context, restores the
+  saved S2CR. Retains backing memory on unconfirmed cleanup. CM3 never runs.
+- Hardware acceleration is NOT complete. No firmware startup/command/render
+  success has been established. Native GMU protocol plan in docs/PERIDOT-GMU-PLAN.md.
+
 ### 0128 exclusive unrouted context pulse preparation (2026-10-23)
 
 - peridotgpu=14: requires CM3 reset1/fwinit0, exact measured SMMU ID0/ID1,

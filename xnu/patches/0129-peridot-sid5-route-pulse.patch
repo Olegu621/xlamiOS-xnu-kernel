@@ -1,0 +1,95 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -93,7 +93,7 @@
+     return true;
+ }
+ static void
+-pgpu_prepare_tables(uint32_t id0, uint32_t id2, vm_offset_t smmu)
++pgpu_prepare_tables(uint32_t id0, uint32_t id2, vm_offset_t smmu, bool route)
+ {
+     bool retain = false;
+     IOPhysicalAddress pool_pa = 0, data_pa = 0;
+@@ -156,10 +156,40 @@
+                 printf("PERIDOT GPU: context pulse program=%u phase=%u enabled=%u readback=%u fault=%#x writes=%u\n",
+                     (unsigned)active, programmed.phase, programmed.enabled,
+                     programmed.readback_valid, programmed.fault_status, programmed.writes);
+-                if (active == ArmSmmu4KSuccess) {
++                bool route_stopped = true;
++                uint32_t saved_smr = 0, saved_s2cr = 0;
++                if (active == ArmSmmu4KSuccess && route) {
++                    uint32_t smr = 0, s2cr = 0, gfsr = 0;
++                    pgpu_ctx_read32((void *)smmu, 0x800, &saved_smr);
++                    pgpu_ctx_read32((void *)smmu, 0xc00, &saved_s2cr);
++                    /* No client can issue requests: CM3 held reset, GX off. */
++                    pgpu_ctx_write32((void *)smmu, 0xc00, 2u << 16);
++                    pgpu_ctx_write32((void *)smmu, 0xc00, 0);
++                    pgpu_ctx_write32((void *)smmu, 0x800, 0x80000005u);
++                    pgpu_ctx_read32((void *)smmu, 0x800, &smr);
++                    pgpu_ctx_read32((void *)smmu, 0xc00, &s2cr);
++                    pgpu_ctx_read32((void *)smmu, 0x48, &gfsr);
++                    printf("PERIDOT GPU: SID5 attach readback=%u SMR=%#x S2CR=%#x GFSR=%#x; CM3 reset\n",
++                        smr == 0x80000005u && s2cr == 0 && gfsr == 0,
++                        smr, s2cr, gfsr);
++                    pgpu_ctx_write32((void *)smmu, 0xc00, 2u << 16);
++                    pgpu_ctx_write32((void *)smmu, 0x800, saved_smr);
++                    pgpu_ctx_read32((void *)smmu, 0x800, &smr);
++                    pgpu_ctx_read32((void *)smmu, 0xc00, &s2cr);
++                    route_stopped = smr == saved_smr && s2cr == (2u << 16);
++                    printf("PERIDOT GPU: SID5 quarantined=%u\n", route_stopped);
++                }
++                if (active == ArmSmmu4KSuccess && route_stopped) {
+                     ArmSmmu4KStatus off = ArmSmmu4KDisableOwnedContext(
+                         &io, 0, &cfg, 10000, &stopped);
+                     retain = stopped.must_retain_tables != 0;
++                    if (!retain && route) {
++                        uint32_t restored;
++                        pgpu_ctx_write32((void *)smmu, 0xc00, saved_s2cr);
++                        pgpu_ctx_read32((void *)smmu, 0xc00, &restored);
++                        retain = restored != saved_s2cr;
++                        printf("PERIDOT GPU: SID5 slot restored=%u\n", !retain);
++                    }
+                     printf("PERIDOT GPU: context pulse disable=%u verified=%u sync=%u retain=%u; no SID routes\n",
+                         (unsigned)off, stopped.disabled_verified,
+                         stopped.tlb_synchronized, retain);
+@@ -495,13 +525,13 @@
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if (mode == 13 || mode == 14) {
+-		if (mode == 14 && (ctx->gmu.inv->sysreset != 1 || ctx->gmu.inv->fw_init != 0)) {
++	if (mode == 13 || mode == 14 || mode == 15) {
++		if ((mode == 14 || mode == 15) && (ctx->gmu.inv->sysreset != 1 || ctx->gmu.inv->fw_init != 0)) {
+ 			printf("PERIDOT GPU: context pulse refused: CM3 not reset\n");
+ 			return;
+ 		}
+ 		pgpu_prepare_tables(ctx->smmu.inv->id[0], ctx->smmu.inv->id[2],
+-		    mode == 14 ? ctx->smmu.base : 0);
++		    (mode == 14 || mode == 15) ? ctx->smmu.base : 0, mode == 15);
+ 	}
+ }
+ 
+@@ -514,11 +544,11 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+-	if (mode == 12) { pgpu_prepare_tables(0, 0, 0); return; }
++	if (mode == 12) { pgpu_prepare_tables(0, 0, 0, false); return; }
+ 	printf("PERIDOT GPU: read-only clock handoff; DT expects Adreno735 id=0x43030b00 gen7-11-0\n");
+ 	vm_offset_t gcc = ml_io_map(0x100000, 0x80000);
+ 	if (!gcc) {
+@@ -914,8 +944,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11 || mode == 13 || mode == 14) {
+-		bool diag = (mode == 11 || mode == 13 || mode == 14);
++	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15) {
++		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15);
+ 		uint32_t reset = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		if (reset < 30 || reset > 3600) {
