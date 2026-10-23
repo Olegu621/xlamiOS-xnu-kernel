@@ -4,6 +4,27 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0133 hardware failure isolated;0134 pmap cache-width fix (2026-10-23)
+
+- CI39976408363 SUCCESS/b50e0d0. ImageSHA256
+  ead1268db2902e2610213370ba84fdf1b6eb7bb004d8a7b491ca8791dda30db4.
+- cycle0133 automatic recovery and console capture succeeded. Firmware parse
+  passed15records; first81920B physical36 allocation passed. Early panic:
+  phystokv_range illegal PA0xc3e6c000, managedRAMbase0x8c0000000.
+  No TCM upload, context activation, CM3 release or HFI exchange happened.
+- Exact source root cause: osfmk/arm/pmap/pmap.c:
+  pmap_sync_page_attributes_phys uses (vm_offset_t)(pp << PAGE_SHIFT).
+  ppnum_t is32-bit: shift truncates upper physical bits before the cast.
+  Cache retyping calls pmap_sync_wimg -> this function -> flush_dcache ->
+  phystokv_range.0134 widens pp to vm_offset_t BEFORE the shift.
+- CPU shared-memory mapping now requests kIOWriteCombineCache, whose ARM64
+  MAIR index1 is explicitly0x44 normal inner/outer NC, matching SMMU MAIR.
+  Previously requested kIOInhibitCache is a device-memory attribute.
+  After retyping, verify every CPU-page physical mapping still matches.
+- Private board plan now also contains the160-dword BW table with GMU_AB,
+  based on actual CMD-DB BCM units/widths/VCDs and DT bandwidth levels.
+- 0134 compilation and device attempt pending. Acceleration remains unfinished.
+
 ### 0133 combined cold boot; automatic return reauthorized (2026-10-23)
 
 - User explicitly reauthorized automatic reboots. The next temporary image

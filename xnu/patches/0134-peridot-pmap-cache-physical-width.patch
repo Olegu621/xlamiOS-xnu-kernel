@@ -1,0 +1,40 @@
+--- a/bsd/dev/peridot_gmu_coldboot.c
++++ b/bsd/dev/peridot_gmu_coldboot.c
+@@ -96,16 +96,23 @@
+     if (!m->cpu) return false;
+     bzero(m->cpu, m->allocation);
+     flush_dcache64(m->physical, m->allocation, TRUE);
++    printf("PERIDOT GMU: remap normal-NC physical=%#llx bytes=%#lx\n",
++        (unsigned long long)m->physical, (unsigned long)m->allocation);
+     /* Change attributes before the first device reference. Do not recycle
+      * this allocation through a cached allocator after remapping it. */
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+     IOReturn status = IOSetProcessorCacheMode(kernel_task,
+-        (IOVirtualAddress)m->cpu, m->allocation, kIOInhibitCache);
++        (IOVirtualAddress)m->cpu, m->allocation, kIOWriteCombineCache);
+ #pragma clang diagnostic pop
+     printf("PERIDOT GMU: memory iova=%#x bytes=%#x cache-status=%#x retained=1\n",
+         m->iova, m->bytes, status);
+-    return status == kIOReturnSuccess;
++    if (status != kIOReturnSuccess) return false;
++    for (vm_size_t off = 0; off < m->allocation; off += PAGE_SIZE) {
++        ppnum_t pp = pmap_find_phys(kernel_pmap, (addr64_t)m->cpu + off);
++        if (!pp || ((uint64_t)pp << PAGE_SHIFT) != m->physical + off) return false;
++    }
++    return true;
+ }
+ static bool pgcb_walk(const ArmSmmu4KResult *built, const ArmSmmu4KRange *r,
+     size_t count, const struct pgcb_memory *pool)
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -6881,7 +6881,8 @@
+ pmap_sync_page_attributes_phys(
+ 	ppnum_t pp)
+ {
+-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
++	/* Widen before shifting: ppnum_t is32 bits, physical RAM is not. */
++	flush_dcache((vm_offset_t)pp << PAGE_SHIFT, PAGE_SIZE, TRUE);
+ }
+ 
+ #if CONFIG_COREDUMP
