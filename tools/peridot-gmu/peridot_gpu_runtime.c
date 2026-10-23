@@ -143,36 +143,42 @@ int peridot_gpu_submit(const struct peridot_gpu_ib *ibs, uint32_t count, uint32_
     *sequence=0;
     if (!peridot_gpu_ready()) return EIO;
     IOLockLock(pgdr.lock);
-    if (pgdr.poisoned || !pgdr_observe() || pgdr.submitted==0x7ffffffe) {
+    if (pgdr.poisoned || !pgdr_observe() || pgdr.submitted>0x7ffffffeu-(count+4)/5) {
         pgdr_poison("submit idle/context observation or sequence exhaustion");IOLockUnlock(pgdr.lock);return EIO;
     }
     for (unsigned i=0;i<count;++i)
         if (ibs[i].reserved || !ibs[i].words || ibs[i].words>0xfffff || (ibs[i].address&3) ||
             !pgdr_range(ibs[i].address,(uint64_t)ibs[i].words*4)) {IOLockUnlock(pgdr.lock);return EINVAL;}
-    uint32_t packet[150]={0},n=1,seq=++pgdr.submitted;
-    /* Preserve a single BR execution path for these trusted raw batches. */
-    packet[n++]=pggx_packet(0x17,1);packet[n++]=(1u<<27)|1u;
-    for (unsigned i=0;i<count;++i) {
-        packet[n++]=pggx_packet(0x3f,3);packet[n++]=(uint32_t)ibs[i].address;
-        packet[n++]=(uint32_t)(ibs[i].address>>32);packet[n++]=ibs[i].words;
+    bool ok=true;
+    /* This exact firmware accepted29-word raw requests and rejected45
+     * with ACK result3. Keep each request inside the observed envelope.
+     * The driver lock spans all chunks; every chunk gets an actual fence. */
+    for (unsigned first=0;ok && first<count;first+=5) {
+        unsigned chunk=count-first<5 ? count-first : 5;
+        uint32_t packet[29]={0},n=1,seq=++pgdr.submitted;
+        packet[n++]=pggx_packet(0x17,1);packet[n++]=(1u<<27)|1u;
+        for (unsigned i=first;i<first+chunk;++i) {
+            packet[n++]=pggx_packet(0x3f,3);packet[n++]=(uint32_t)ibs[i].address;
+            packet[n++]=(uint32_t)(ibs[i].address>>32);packet[n++]=ibs[i].words;
+        }
+        packet[n++]=pggx_packet(0x46,4);packet[n++]=0x31u|(1u<<27);
+        packet[n++]=pggx.fence_va+16;packet[n++]=0;packet[n++]=seq;
+        packet[n++]=pggx_packet(0x26,0);
+        ok=pggx_raw(&pgdr.hfi,pgdr.gpu,pgdr.gmu,pgdr.smmu,packet,n,&pgdr.sequence);
+        volatile uint32_t *fence=pggx.fence.cpu;
+        for (unsigned wait=0;ok && wait<100000;++wait) {
+            __asm__ volatile("dmb oshld" ::: "memory");
+            if (fence[4]==seq) break;
+            delay(10);
+        }
+        ok=ok && fence[4]==seq && pgdr_observe();
+        if (ok) {
+            pgdr.completed=seq;
+            if (seq<=8 || count>5) printf("PERIDOT GPU: chunk=%u IBs=%u first=%u GPU-fence=%u completed=1\n",
+                seq,chunk,first,fence[4]);
+        }
     }
-    /* KGSL gen7 uses CACHE_CLEAN|BIT27 with a64-bit timestamp address.
-     * This commits the completion only after cache writes reach memory. */
-    packet[n++]=pggx_packet(0x46,4);packet[n++]=0x31u|(1u<<27);
-    packet[n++]=pggx.fence_va+16;packet[n++]=0;packet[n++]=seq;
-    packet[n++]=pggx_packet(0x26,0);
-    bool ok=pggx_raw(&pgdr.hfi,pgdr.gpu,pgdr.gmu,pgdr.smmu,packet,n,&pgdr.sequence);
-    volatile uint32_t *fence=pggx.fence.cpu;
-    for (unsigned wait=0;ok && wait<100000;++wait) {
-        __asm__ volatile("dmb oshld" ::: "memory");
-        if (fence[4]==seq) break;
-        delay(10);
-    }
-    ok=ok && fence[4]==seq && pgdr_observe();
-    if (ok) {
-        pgdr.completed=seq;*sequence=seq;
-        if (seq<=8) printf("PERIDOT GPU: userspace batch=%u IBs=%u GPU-fence=%u completed=1\n",seq,count,fence[4]);
-    }
+    if (ok) *sequence=pgdr.completed;
     else pgdr_poison("command/fence completion");
     IOLockUnlock(pgdr.lock);
     return ok ? 0 : EIO;

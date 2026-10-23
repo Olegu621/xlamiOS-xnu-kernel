@@ -4,6 +4,45 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0146 actual Mesa-to-GPU batches PASS; display format and raw size block UI
+
+- Full180s capture returned. User requested3minutes before reboot again:
+  KEEP sweetdiagreset=180 in subsequent builds. Shot160 decoded/inspected:
+  actual physical panel black (160x356/power1), no UI success.
+- Actual GLES3/EAGL context, shader/draw/flush/GLsync path runs. Fourteen
+  sequential userspace raw requests ACK0 and pass actual GPU-fence checks;
+  first8 explicitly log completed values1..8. No SMMU/CP fault at rejection.
+  This is real Mesa command execution, not evidence of usable display pixels.
+- Selector6 fixes work: real BGRA/A8/RGhA client-image mappings, readonly
+  source fallback, continued rendering instead of the old bulk-attachment
+  crash. Planar stride now4544, correctly fixed from0. Metadata repair PASS.
+- SDR extension filter did NOT change main framebuffer: stillb3a8, rejected
+  by frontend, GL_INVALID_FRAMEBUFFER_OPERATION0x506. Do not claim format fix.
+- Next failure is precise GMU rejection: request131/sequence40/45words gets
+  real ACK result3. Previous29-word/5-IB request accepted. No timeout/hang
+  proved: firmware refused the large raw envelope. Driver poisons/pins
+  backing as designed; later resource-loss crash and software fallback.
+-0147 conservatively chunks at5IBs/29words (observed accepted size, NOT a
+  claimed undocumented firmware maximum), actual cache-clean fence per
+  chunk, one lock across the entire submission, final sequence returned
+  only after all chunks. Failure still poisons and pins; bounded sequence.
+- ConsoleSHA4dafd29f1db298e384d0c285a8e9d5a7bd5d923777d8fc96582bc96b994ac905.
+  Private shot work/cycle0146/panel.png. No permanent flash. CI pending.
+
+### 0146 compiled and temporary boot started (2026-10-24 Moscow)
+
+- Kernel CI40019094390/be27962 SUCCESS; Mesa CI40019964198/6c9e4c3 SUCCESS.
+  Kernel artifact checksum verified by image builder. Real signed driver
+ 15234976B, SHA52cc51ce41fd56d68fe1a35fe81edc92723fc13d2e77bba5c0f8ab030f546cdb.
+- Temporary imageSHA
+ c117b37774589c43e9f0a247681efead30e8911a593575ba696401870b00b119,
+  mode21/peridotgles1/timer180/sweetfbshot160. Firmware hashes unchanged.
+  Phone accepted temporary boot; runtime result still pending. No flash.
+- Driver candidate negotiates single-plane SDR by withholding four optional
+  OES float extension aliases from CA's legacy extension query. This does
+  NOT yet prove the selected display format changed; check actual log/shot.
+- Private artifacts: work/ci0146, mesa-ios0146, boot0146, cycle0146.
+
 ### 0146 builds: measured ABI repair and candidate SDR capability negotiation
 
 - Kernel CI40019094390 buildsbe27962, still running. No0146 boot yet.
