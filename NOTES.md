@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0146 builds: measured ABI repair and candidate SDR capability negotiation
+
+- Kernel CI40019094390 buildsbe27962, still running. No0146 boot yet.
+- Exact20H392 QuartzCore GLESContext constructor18840960c reads the legacy
+  GL_OES_texture_half_float/float aliases and sets capability bits11/13 at
+  context+824. Candidate frontend withholds those optional aliases while
+  two-plane RGB10/alpha IOSurface interop is unimplemented. Native GLES3
+  functions/IR3 remain; no CPU rasterizer or b3a8-as-BGRA reinterpretation.
+- Library change is a candidate negotiation, NOT yet evidence CA chooses
+  8-bit storage. Real next log must show chosen format, complete FBO and
+  GPU-written runtime fences. Kernel independent CI is not cancelled.
+- Next boot adds sweetfbshot=160 to capture the actual panel into the log
+  before180s reset; this avoids depending on a user watching every cycle.
+
 ### 0145 context/EAGL PASS; planar format and client-image ABI block frames
 
 - Mesa CI40016485950/8dd0f59 SUCCESS. Dylib15234816B, SHA
