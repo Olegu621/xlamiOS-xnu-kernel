@@ -55,7 +55,7 @@ def main():
         raise RuntimeError('Mesa release archive SHA256 mismatch')
     with tarfile.open(archive) as source:
         for member in source.getmembers():
-            if not member.name.startswith(f'mesa-{MESA}/'):
+            if member.name != f'mesa-{MESA}' and not member.name.startswith(f'mesa-{MESA}/'):
                 raise RuntimeError('unexpected Mesa archive prefix')
         source.extractall(work, filter='data')
     mesa, build, front = work / f'mesa-{MESA}', work / 'build', work / 'frontend'
