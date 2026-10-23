@@ -4,6 +4,19 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0130 kernel boot-bundle plumbing (2026-10-23)
+
+- Links HFI17 transport and pinned AdrenoFirmware parser into the probe TU.
+  Mode16 reads PeridotGMUFirmware from secure DT memory-map, bounds-checks
+  its actual80680B extent against /chosen DRAM, maps via ml_static_ptovirt,
+  parses15 records and initializes17-queue HFI in owned aligned memory.
+- Tables/queue backing are still not installed as the complete firmware map.
+  No TCM upload/reset release/startup exchange in this patch. It frees the
+  HFI allocation because it is never device-referenced; cache publication is
+  not evidence of firmware execution. Compilation/hardware result pending.
+- Build image must use mkpayload.py --gmu-firmware exact private file.
+  This is integration plumbing, not the complete cold-start implementation.
+
 ### HWSCHED HFI17 transport implementation (2026-10-23)
 
 - Authored tools/peridot-gmu/peridot_hfi.{c,h}, matching Qualcomm KGSL

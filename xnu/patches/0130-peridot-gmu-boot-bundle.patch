@@ -1,0 +1,321 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -91,6 +91,63 @@
+             (ctl & 1)) return false;
+     }
+     return true;
++}
++
++#include <pexpert/device_tree.h>
++#include "peridot_hfi.c"
++#include "peridot_adreno_firmware.c"
++static void pgpu_hfi_barrier(void *cookie, unsigned publish)
++{
++    (void)cookie; (void)publish;
++    __asm__ volatile("dsb sy" ::: "memory");
++}
++static int pgpu_hfi_notify(void *cookie)
++{
++    return pgpu_ctx_write32(cookie, (0x1f994u << 2) - 0x68000u, 1);
++}
++static void pgpu_boot_bundle(vm_offset_t gmu)
++{
++    DTEntry entry, chosen;
++    const uint64_t *region, *dram, *dram_size;
++    unsigned bytes = 0, count_bytes = 0;
++    if (SecureDTLookupEntry(NULL, "/chosen/memory-map", &entry) != kSuccess ||
++        SecureDTGetProperty(entry, "PeridotGMUFirmware", (const void **)&region, &bytes) != kSuccess || bytes != 16 ||
++        SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++        SecureDTGetProperty(chosen, "dram-base", (const void **)&dram, &count_bytes) != kSuccess || count_bytes != 8 ||
++        SecureDTGetProperty(chosen, "dram-size", (const void **)&dram_size, &count_bytes) != kSuccess || count_bytes != 8) {
++        printf("PERIDOT GPU: boot bundle lacks reserved firmware/DRAM metadata\n");
++        return;
++    }
++    uint64_t pa = region[0], length = region[1];
++    if ((pa & 0x3fff) || length != 80680 || pa < *dram ||
++        pa - *dram > *dram_size || length > *dram_size - (pa - *dram)) {
++        printf("PERIDOT GPU: boot bundle firmware range refused\n");
++        return;
++    }
++    const uint8_t *fw = (const uint8_t *)ml_static_ptovirt(pa);
++    if (!fw) return;
++    AdrenoFirmwareRegion regions[] = {
++        {0,0x4000,1},{0x4000,0xffc000,2},
++        {0x10004000,0x4000,3},{0x60000000,0x20000000,4}
++    };
++    AdrenoFirmwareBlock blocks[32]; size_t count = 0;
++    AdrenoFirmwareResult parsed = AdrenoFirmwarePlanGmu(fw, length, regions, 4, blocks, 32, &count);
++    printf("PERIDOT GPU: boot bundle firmware parse=%u records=%lu\n", (unsigned)parsed, (unsigned long)count);
++    if (parsed != AdrenoFirmwareSuccess || count != 15) return;
++    IOPhysicalAddress hfi_pa = 0;
++    const vm_size_t allocation = 0x14000;
++    uint32_t *shared = IOMallocContiguous(allocation, 0x4000, &hfi_pa);
++    if (!shared) return;
++    struct pg_hfi hfi = {shared, allocation, 0x60002000,
++        (void *)gmu, pgpu_hfi_barrier, pgpu_hfi_notify, 0};
++    enum pg_hfi_status status = pg_hfi_initialize(&hfi);
++    bool layout = status == PG_HFI_OK && shared[1] == 210 && shared[4] == 17 &&
++        shared[6+16*12+1] == 0x60002000u + 848 + 16*4096;
++    if (layout) flush_dcache64(hfi_pa, allocation, TRUE);
++    printf("PERIDOT GPU: boot bundle HFI17 init=%u layout=%u pages=%lu; queues not device-mapped\n",
++        status, layout, (unsigned long)(allocation/4096));
++    /* No route references this allocation; initialization publishes no packet. */
++    IOFreeContiguous(shared, allocation);
+ }
+ static void
+ pgpu_prepare_tables(uint32_t id0, uint32_t id2, vm_offset_t smmu, bool route)
+@@ -523,9 +580,12 @@
+ 
+ 	pgpu_gmu_inventory_read(&ctx->gmu);
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
++	uint32_t bundle = 0;
++	PE_parse_boot_argn("peridotgpu", &bundle, sizeof(bundle));
++	if (bundle == 16) pgpu_boot_bundle(ctx->gmu.base);
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if (mode == 13 || mode == 14 || mode == 15) {
++	if (mode == 13 || mode == 14 || mode == 15 || mode == 16) {
+ 		if ((mode == 14 || mode == 15) && (ctx->gmu.inv->sysreset != 1 || ctx->gmu.inv->fw_init != 0)) {
+ 			printf("PERIDOT GPU: context pulse refused: CM3 not reset\n");
+ 			return;
+@@ -544,7 +604,7 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15 && mode != 16) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -944,8 +1004,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15) {
+-		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15);
++	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16) {
++		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16);
+ 		uint32_t reset = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		if (reset < 30 || reset > 3600) {
+--- /dev/null
++++ b/bsd/dev/peridot_hfi.c
+@@ -0,0 +1,72 @@
++/* SPDX-License-Identifier: MIT */
++#include "peridot_hfi.h"
++#define PG_HFI_QUEUES 17u
++#define PG_HFI_WORDS 1024u
++#define PG_HFI_DATA_OFFSET 848u
++#define PG_HFI_MIN_BYTES (PG_HFI_DATA_OFFSET+4096u*PG_HFI_QUEUES)
++static enum pg_hfi_status corrupt(struct pg_hfi *h)
++{ h->poisoned=1;return PG_HFI_CORRUPT; }
++static unsigned priority(unsigned q)
++{ return q<7?0:q<11?1:q<14?2:q<16?3:4; }
++static int arguments(const struct pg_hfi *h)
++{
++    return h && h->memory && !((uintptr_t)h->memory&4095) && h->bytes>=PG_HFI_MIN_BYTES &&
++        h->bytes<=UINT32_MAX && h->iova && !(h->iova&4095) &&
++        h->bytes<=UINT64_C(0x100000000)-h->iova && h->barrier && h->notify;
++}
++enum pg_hfi_status pg_hfi_initialize(struct pg_hfi *h)
++{
++    if(!arguments(h))return PG_HFI_ARGUMENT;
++    if(h->poisoned)return PG_HFI_CORRUPT;
++    for(size_t i=0;i<h->bytes/4;++i)h->memory[i]=0;
++    volatile uint32_t *m=h->memory;
++    m[0]=0;m[1]=210;m[2]=6;m[3]=12;m[4]=17;m[5]=17;
++    for(unsigned q=0;q<PG_HFI_QUEUES;++q) {
++        volatile uint32_t *v=m+6+12*q;
++        v[0]=1;v[1]=h->iova+PG_HFI_DATA_OFFSET+4096*q;
++        v[2]=q|(priority(q)<<8);v[3]=PG_HFI_WORDS;
++    }
++    h->barrier(h->cookie,1);return PG_HFI_OK;
++}
++static enum pg_hfi_status queue(struct pg_hfi *h,unsigned q,
++    volatile uint32_t **header,volatile uint32_t **data,uint32_t *rd,uint32_t *wr)
++{
++    if(!arguments(h) || q>=PG_HFI_QUEUES)return PG_HFI_ARGUMENT;
++    if(h->poisoned)return PG_HFI_CORRUPT;
++    h->barrier(h->cookie,0);
++    volatile uint32_t *m=h->memory,*v=m+6+12*q;
++    if(m[0] || m[1]!=210 || m[2]!=6 || m[3]!=12 || m[4]!=17 || m[5]!=17 ||
++        v[0]!=1 || v[1]!=h->iova+PG_HFI_DATA_OFFSET+4096*q ||
++        v[2]!=(q|(priority(q)<<8)) || v[3]!=PG_HFI_WORDS || v[4])return corrupt(h);
++    *rd=v[10];*wr=v[11];
++    if(*rd>=PG_HFI_WORDS || *wr>=PG_HFI_WORDS || ((*rd|*wr)&3))return corrupt(h);
++    *header=v;*data=m+PG_HFI_DATA_OFFSET/4+q*PG_HFI_WORDS;
++    return PG_HFI_OK;
++}
++enum pg_hfi_status pg_hfi_send(struct pg_hfi *h,const uint32_t *packet,size_t words)
++{
++    if(!packet || !words || words>255 || ((packet[0]>>8)&255)!=words)return PG_HFI_ARGUMENT;
++    volatile uint32_t *v,*data;uint32_t rd,wr;
++    enum pg_hfi_status status=queue(h,0,&v,&data,&rd,&wr);if(status)return status;
++    unsigned padded=((unsigned)words+3)&~3u;
++    if(padded>((rd-wr-1)&1023))return PG_HFI_FULL;
++    for(unsigned i=0;i<padded;++i)data[(wr+i)&1023]=i<words?packet[i]:0xfafafafa;
++    h->barrier(h->cookie,1);v[11]=(wr+padded)&1023;h->barrier(h->cookie,1);
++    if(h->notify(h->cookie)){h->poisoned=1;return PG_HFI_IO;}
++    return PG_HFI_OK;
++}
++enum pg_hfi_status pg_hfi_receive(struct pg_hfi *h,unsigned q,uint32_t *packet,
++    size_t capacity,size_t *words)
++{
++    if(!packet || !words || (q!=1 && q!=2))return PG_HFI_ARGUMENT;
++    *words=0;
++    volatile uint32_t *v,*data;uint32_t rd,wr;
++    enum pg_hfi_status status=queue(h,q,&v,&data,&rd,&wr);if(status)return status;
++    unsigned available=(wr-rd)&1023;if(!available)return PG_HFI_EMPTY;
++    unsigned n=(data[rd]>>8)&255,padded=(n+3)&~3u;
++    if(!n || padded>available)return corrupt(h);
++    *words=n;if(n>capacity)return PG_HFI_CAPACITY;
++    for(unsigned i=0;i<n;++i)packet[i]=data[(rd+i)&1023];
++    h->barrier(h->cookie,1);v[10]=(rd+padded)&1023;h->barrier(h->cookie,1);
++    return PG_HFI_OK;
++}
+--- /dev/null
++++ b/bsd/dev/peridot_hfi.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef PERIDOT_HFI_H
++#define PERIDOT_HFI_H
++#include <stdint.h>
++#include <stddef.h>
++enum pg_hfi_status {PG_HFI_OK,PG_HFI_ARGUMENT,PG_HFI_CORRUPT,PG_HFI_FULL,PG_HFI_EMPTY,PG_HFI_CAPACITY,PG_HFI_IO};
++struct pg_hfi {
++    volatile uint32_t *memory;
++    size_t bytes;
++    uint32_t iova;
++    void *cookie;
++    void (*barrier)(void *,unsigned publish);
++    int (*notify)(void *);
++    unsigned poisoned;
++};
++/* Caller supplies stopped-GMU, exclusively owned, CPU/GMU coherent or
++ * noncached memory and real device barriers/notification. Initialization
++ * cannot establish physical mappings or cache attributes. Storage remains
++ * pinned until the GMU is stopped and SMMU transactions have drained. */
++enum pg_hfi_status pg_hfi_initialize(struct pg_hfi *);
++/* Complete wire packet including header; command queue0, max255 dwords.
++ * A notification failure after publication is indeterminate and poisons it. */
++enum pg_hfi_status pg_hfi_send(struct pg_hfi *,const uint32_t *,size_t);
++/* Receive from response queue1 or debug queue2. Capacity failure preserves
++ * the packet. Successful receive advances the real shared read index. */
++enum pg_hfi_status pg_hfi_receive(struct pg_hfi *,unsigned,uint32_t *,size_t,size_t *);
++#endif
+--- /dev/null
++++ b/bsd/dev/peridot_adreno_firmware.c
+@@ -0,0 +1,69 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++#include "AdrenoFirmware.h"
++
++static uint32_t le32(const uint8_t *p)
++{
++  return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
++         (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
++}
++
++AdrenoFirmwareResult AdrenoFirmwarePlanGmu(
++    const uint8_t *firmware, size_t bytes,
++    const AdrenoFirmwareRegion *regions, size_t region_count,
++    AdrenoFirmwareBlock *blocks, size_t capacity, size_t *count)
++{
++  if (!count) return AdrenoFirmwareInvalid;
++  *count = 0;
++  if (!firmware || !regions || !blocks || !region_count || region_count > 64)
++    return AdrenoFirmwareInvalid;
++  if (bytes < 16) return AdrenoFirmwareTruncated;
++  for (size_t i = 0; i < region_count; ++i) {
++    const AdrenoFirmwareRegion *a = regions + i;
++    if (!a->bytes || (a->address & 3) || (a->bytes & 3) ||
++        a->bytes > UINT64_C(0x100000000) - a->address || a->identifier == UINT32_MAX)
++      return AdrenoFirmwareInvalid;
++    for (size_t j = 0; j < i; ++j) {
++      const AdrenoFirmwareRegion *b = regions + j;
++      if (a->identifier == b->identifier ||
++          ((uint64_t)a->address < (uint64_t)b->address + b->bytes &&
++           (uint64_t)b->address < (uint64_t)a->address + a->bytes))
++        return AdrenoFirmwareInvalid;
++    }
++  }
++  for (unsigned pass = 0; pass < 2; ++pass) {
++    size_t offset = 0, n = 0;
++    while (offset < bytes) {
++      if (bytes - offset < 16) return AdrenoFirmwareTruncated;
++      uint32_t address = le32(firmware + offset);
++      uint32_t length = le32(firmware + offset + 4);
++      uint32_t identifier = UINT32_MAX;
++      if (length > bytes - offset - 16) return AdrenoFirmwareTruncated;
++      if (length) {
++        if ((address & 3) || (length & 3) ||
++            length > UINT64_C(0x100000000) - address)
++          return AdrenoFirmwareInvalid;
++        for (size_t i = 0; i < region_count; ++i) {
++          if (address >= regions[i].address && length <= regions[i].bytes &&
++              (uint64_t)address - regions[i].address <= regions[i].bytes - length) {
++            identifier = regions[i].identifier;
++            break;
++          }
++        }
++        if (identifier == UINT32_MAX) return AdrenoFirmwareUnmapped;
++      }
++      if (n == capacity) return AdrenoFirmwareNoSpace;
++      if (pass) {
++        blocks[n].address = address;
++        blocks[n].bytes = length;
++        blocks[n].type = le32(firmware + offset + 8);
++        blocks[n].value = le32(firmware + offset + 12);
++        blocks[n].payload_offset = offset + 16;
++        blocks[n].region_identifier = identifier;
++      }
++      n++;
++      offset += 16 + (size_t)length;
++    }
++    if (pass) *count = n;
++  }
++  return AdrenoFirmwareSuccess;
++}
+--- /dev/null
++++ b/bsd/dev/AdrenoFirmware.h
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++#ifndef ADRENO_FIRMWARE_H
++#define ADRENO_FIRMWARE_H
++#include <stddef.h>
++#include <stdint.h>
++
++typedef struct {
++  uint32_t address;
++  uint64_t bytes;
++  uint32_t identifier;
++} AdrenoFirmwareRegion;
++
++typedef struct {
++  uint32_t address, bytes, type, value;
++  size_t payload_offset;
++  uint32_t region_identifier;
++} AdrenoFirmwareBlock;
++
++typedef enum {
++  AdrenoFirmwareSuccess,
++  AdrenoFirmwareInvalid,
++  AdrenoFirmwareTruncated,
++  AdrenoFirmwareUnmapped,
++  AdrenoFirmwareNoSpace
++} AdrenoFirmwareResult;
++
++/* No output entries are changed on failure; *count is then zero.
++ * Zero-size metadata stays opaque, with region_identifier UINT32_MAX.
++ * Success validates structure/ranges, not firmware authenticity or execution.
++ */
++#ifdef __cplusplus
++extern "C" {
++#endif
++AdrenoFirmwareResult AdrenoFirmwarePlanGmu(
++    const uint8_t *firmware, size_t bytes,
++    const AdrenoFirmwareRegion *regions, size_t region_count,
++    AdrenoFirmwareBlock *blocks, size_t capacity, size_t *count);
++#ifdef __cplusplus
++}
++#endif
++#endif
