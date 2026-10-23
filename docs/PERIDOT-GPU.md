@@ -163,6 +163,20 @@ as a shortcut.
    instead of trusting branch readbacks and starts the GMU bring-up
    (clocks, CX, GMU reset/firmware, SMMU, HFI) rather than more GPUCC
    power writes.
+   **0119/0120: the clocks are measured, not inferred.** The first
+   measurement stage (0119) panicked before writing anything because it
+   read the GCC debug registers through the GPUCC mapping (GPUCC base
+   +0x62024, outside its0xa000 window); 0120 passes the two io contexts
+   separately. The measured state: the configuration AHB clock runs at
+   19.2MHz both at handoff and with CX live although its enable bit reads0
+   - the 0115-0118 "gate refuses" conclusion is a measured false negative.
+   The CX-domain GPUCC clocks (cx-gmu, hub-cx-int) read0 with CX off and
+   19.2MHz with CX live, i.e. the GMU clock source is still the crystal:
+   the GMU bring-up has to program gmu_clk_src (0x9168/0x916c) from GPLL0,
+   enable the gmu and cxo branches and then start the GMU. hub-aon and
+   cxo-aon are always-on at19.2MHz, memnoc-gfx and gx-gfx3d are off.
+   Every debug register was restored and both domains returned to their
+   handoff values (CX0x22f801, hw0x2800010a, GX0x22f801).
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU

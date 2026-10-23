@@ -4,6 +4,47 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0119 panic, 0120 fix, and the measured clock state (2026-10-23, autonomous)
+
+- 0119 (peridotgpu=7, CI 39886255457 SUCCESS commit 63f31c7, kernel
+  sha256 fe6bc9bd..., image shim-boot-0119-meas.img sha256 a405e52e...,
+  cycle-0119-meas, console 10380 bytes) panicked before measuring anything:
+  the stage read the GCC debug registers (mux0x62024, control0x62048)
+  through the GPUCC io context, i.e. at GPUCC base +0x62024, which is
+  outside that 0xa000 mapping. Data abort, translation fault, far
+  0xfffffe3c167d2024, x1=0x62024; no register had been written and the
+  diagnostic reset timer returned the phone to recovery. The stage itself
+  is sound, the mapping was not.
+- 0120 (CI 39887649897 SUCCESS commit 9e3ca69, kernel sha256 2b62bca0...,
+  image shim-boot-0120-meas.img sha256 83f1584b..., cycle-0120-meas,
+  console 132296 bytes) passes the GCC and GPUCC io contexts separately
+  and the measurement completes:
+  MEAS ahb handoff=19200144 live=19200292;
+  cx-gmu 0/19200292; cxo 0/19200144; hub-aon 19200292/19200292;
+  hub-cx-int 0/19200292; memnoc-gfx 0/0; cxo-aon 19200144/19200144;
+  gx-gfx3d 0/0. Probe handoff8/8 live8/8 counter1 powered1 restored1;
+  CX=0x22f801 hw=0x2800010a GX=0x22f801. PASS.
+- What the numbers settle:
+  * The counter and the debugcc-cliffs register map are correct: cxo and
+    cxo-aon measure19.2MHz (the crystal), so the rate formula is right.
+  * The configuration AHB clock RUNS at19.2MHz in the handoff state and
+    with CX live, while its enable bit at0x90c8 reads0. The 0115-0118
+    "gate refuses" conclusion is therefore a false negative confirmed by
+    measurement, exactly as the working reference driver warned; the AHB
+    branch bit is not a status source and no further work is needed there.
+  * The CX-domain GPUCC clocks are at their default19.2MHz because the GMU
+    clock source register (0x9168/0x916c) is halted/no-source: cx-gmu and
+    hub-cx-int read0 with CX off and19.2MHz with CX live, not the200MHz the
+    GMU bring-up wants. The GMU path must program gmu_clk_src from GPLL0,
+    enable the gmu/cxo branches and only then start the GMU.
+  * hub-aon and cxo-aon are always-on at19.2MHz; memnoc-gfx (0x90fc,
+    disabled) and gx-gfx3d are off, GX as expected until the GMU powers it.
+- Next: 0121 programs the GMU clock source and the hub RCG, takes the now
+  known-harmless AHB enable write and measures again (expect gmu/hub at
+  their programmed rates); 0122 is the read-only GMU inventory (CM3 reset,
+  firmware-init result, HFI status, always-on counter) before any GMU
+  write. No GPU/GMU/SMMU register has been touched yet.
+
 ### 0117 + 0118 hardware results, and the AHB/GX correction (2026-10-23, autonomous)
 
 - 0117 (peridotgpu=5, image shim-boot-0117-aon.img sha256 8ad27746...,
