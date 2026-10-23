@@ -5,6 +5,20 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0143 HARDWARE PASS: IOKit service registered, engine held for180s
+
+- CI40011784035/b19d8d7, imageSHA
+ 2282b9e2520fc8a9e1b8a75e5f164c6e0948a8be37afe4aed45fa355018bf975.
+  Actual log explicitly reports IOKit BO service registration. CP/ZAP/
+  observed MEM_WRITE repeat, contexts/OOB/clocks retained with ACTIVE lease.
+- No panic, iOS userland continues, touch799/drops0, full180s recovery capture.
+  ConsoleSHA8501220cf3e5b5d4ba449c6f3a60aaeedaefe5b4fe9cc917afbae320356bc69e.
+  BO/IB/IOSurface operations not yet consumed by a userspace driver.
+-0144 CI40013951646 builds3930358. Explicit boot-carried15MiB GLES driver,
+  VFS byte verification and compositor-only environment/policy are implemented;
+  kernel compilation and real library loading remain pending. Next image
+  builder work/build0144.py includes real driver/manifest and peridotgles=1.
+
 ### 0142 HARDWARE PASS;0143 compiled; real GLES library built
 
 -0142 CI40010486560/48f2bb6; imageSHA
