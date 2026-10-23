@@ -4,6 +4,16 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### SID5 preparation (2026-10-23)
+
+- Rechecked saved SCTLR: all22 banks have M=0. CR0.USFCFG=1:
+  unmatched streams fault. Observation does not establish exclusive ownership.
+- Vendored unmodified MIT ArmSmmu4K at4d0d6598b1a36aeec3de01091893fa6660e49388
+  in commit8dba10b. Not linked into the kernel, not hardware-tested here.
+- Next: XNU-owned physical table allocation, cache publication, disabled-bank
+  programming/readback and bounded TLB sync, then exact SID5 attachment.
+  Keep CM3 reset and retain backing memory on uncertain rollback.
+
 ### 0125 hardware result on Windows PC (2026-10-23)
 
 - CI39934580837, source cd51bba: SUCCESS. Downloaded kernel SHA256 matched
