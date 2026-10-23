@@ -4,6 +4,16 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### Manual-return boot tooling (2026-10-23)
+
+- tools/peridot-boot-manual.py verifies actual packed cmdline contains
+  sweetdiagreset=0, sweetpanicreset=0 and peridotmanual=1 before any device
+  command, requires exactly one recovery phone, reboots to fastboot and
+  performs temporary boot only. No timed-reset BCB write or post-boot reboot.
+- Python syntax checked; timed0131 image correctly refused before device I/O.
+- CI39952943177 is the0132 manual-return kernel build. Hardware pending.
+  ADB disappearing under XNU is not independent visual proof of iOS boot.
+
 ### 0131 PASS and user-requested manual-return images (2026-10-23)
 
 - CI39951397770 SUCCESS/da6291a, cycle0131 imageSHA
