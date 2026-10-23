@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0127 hardware PASS (2026-10-23)
+
+- CI39938546016, e6472c4 built successfully; downloaded kernel hash matched.
+  Temporary image SHA256d03e661ecd15acb6ad79bb039a85af7c62a1faad331b4f2082fa10c6349ccc83.
+- Windows cycle0127 returned automatically to recovery; console captured.
+  Actual IDs accepted: context encode=0 published=1, CBAR0x1f300,
+  CBA2R1, TCR0x80802020, TCR2 0x38011, SCTLR0x1067.
+  Allocation/table walk status0/walk1/pages3/leaves4; inventory stage PASS.
+- Cache cleaning code completed; no device-side translation proof. Context
+  image remains inactive, no SID5 route installed. No panic line observed.
+- Next: retained allocations and exclusive disabled-bank setup/readback,
+  bounded TLB synchronization, fault capture, then SID5 attachment while
+  keeping CM3 reset. Do not treat the inactive image as a running context.
+
 ### 0127 context image and cache publication (2026-10-23)
 
 - peridotgpu=13 extends the powered GMU/SMMU observation callback with the
