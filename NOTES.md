@@ -4,6 +4,23 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### HWSCHED HFI17 transport implementation (2026-10-23)
+
+- Authored tools/peridot-gmu/peridot_hfi.{c,h}, matching Qualcomm KGSL
+ 17-queue table layout and priorities, command queue0 and response/debug1/2,
+ 16-byte wire padding, wrap/capacity validation, poisoned-state handling after
+ corrupt state or indeterminate notify. Caller must supply genuinely coherent
+ or noncached mapped memory and real device barriers/doorbell.
+- CI39947533067 SUCCESS at4953cb8: C11 warnings-as-errors plus ASan/UBSan,
+ tests for table format, full/wrap queues, receive capacity, malformed packet,
+ corrupt indices and notification failure. These are host contract checks.
+- Not linked into the kernel yet. No real HFI exchange or GMU startup is
+ established. The complete boot integration still needs firmware consumption,
+ retained pools/cache attributes, TCM loading/readback, clock/reset/RSC setup,
+ GMU release and HWSCHED startup with real memory-request replies.
+- Existing verified0129 kernel remains the latest hardware result. Avoid
+ describing new transport sources or passing host tests as GPU acceleration.
+
 ### Combined GMU boot: firmware transport (2026-10-23)
 
 - tools/mkpayload.py now accepts --gmu-firmware for the exact verified80680B
