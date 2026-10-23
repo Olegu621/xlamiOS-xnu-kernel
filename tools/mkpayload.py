@@ -25,8 +25,12 @@ kernel_end past it, so the shim needs no changes: the image lands below the
 ADT and boot_args, inside topOfKernelData (never handed to the VM), and the
 ADT gets /chosen/memory-map "RAMDisk" = <phys, size> for IOFindBSDRoot to
 turn into md0 (boot with rd=md0).
+
+Optional peridot GMU/SQE/ZAP files are hash-checked and carried as separate
+reserved segments plus /chosen/memory-map descriptors. Transport alone does
+not upload SQE into GPU memory or authenticate ZAP with the secure firmware.
 """
-import argparse, os, struct, sys
+import argparse, hashlib, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -141,7 +145,8 @@ def adt_dram(adt_blob):
             struct.unpack('<Q', chosen.prop('dram-size'))[0])
 
 
-def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=None):
+def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=None,
+          sqe_firmware_path=None, zap_firmware_path=None):
     buf = bytearray(open(kernel_path, 'rb').read())
     m = parse_macho(buf)
     nfix = apply_chained_fixups(buf, m)
@@ -169,22 +174,32 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=N
         adt_blob = add_ramdisk_to_adt(adt_blob, rd_pa, rd_size)
         ramdisk = (hex(rd_pa), hex(rd_size))
 
-    gmu_firmware = None
-    if gmu_firmware_path:
-        import hashlib
-        firmware = open(gmu_firmware_path, 'rb').read()
-        expected = '435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864'
-        if hashlib.sha256(firmware).hexdigest() != expected:
-            raise ValueError('GMU firmware differs from the verified peridot image')
+    firmware_info = {}
+    firmware_inputs = (
+        ('gmu_firmware', gmu_firmware_path, 'PeridotGMUFirmware', 80680,
+         '435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864'),
+        ('sqe_firmware', sqe_firmware_path, 'PeridotSQEFirmware', 66036,
+         'b6df660d109504dbea5a266910b037a33d893a11c6de52f524a5fd112008c401'),
+        ('zap_firmware', zap_firmware_path, 'PeridotZAPFirmware', 12088,
+         'dbfd89112520d774781ecf511ce74c31e6a5a95a8002cafd2a51f0ef1e368f45'),
+    )
+    for label, path, property_name, expected_bytes, expected_sha in firmware_inputs:
+        firmware_info[label] = None
+        if path is None:
+            continue
+        with open(path, 'rb') as image:
+            firmware = image.read()
+        if len(firmware) != expected_bytes or hashlib.sha256(firmware).hexdigest() != expected_sha:
+            raise ValueError(label + ' differs from the verified peridot image')
         fw_va = kernel_end
         fw_size = (len(firmware) + PAGE - 1) & ~(PAGE - 1)
         fw_pa = fw_va - virt_base + PHYS_BASE
         if fw_pa < PHYS_BASE or fw_pa + fw_size > PHYS_BASE + MEM_SIZE:
-            raise ValueError('GMU firmware extends outside kernel-managed RAM')
+            raise ValueError(label + ' extends outside kernel-managed RAM')
         kernel_end += fw_size
         pieces.append((fw_va, fw_size, firmware))
-        adt_blob = add_ramdisk_to_adt(adt_blob, fw_pa, len(firmware), 'PeridotGMUFirmware')
-        gmu_firmware = (hex(fw_pa), len(firmware), expected)
+        adt_blob = add_ramdisk_to_adt(adt_blob, fw_pa, len(firmware), property_name)
+        firmware_info[label] = (hex(fw_pa), len(firmware), expected_sha)
 
     hdr_size = SEG_TABLE + 32 * len(pieces)
     out = bytearray(hdr_size)
@@ -206,7 +221,7 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=N
     for i, t in enumerate(seg_table):
         struct.pack_into('<4Q', out, SEG_TABLE + 32 * i, *t)
     info = dict(cputype=hex(m['cputype']), cpusub=m['cpusub'], fixups=nfix, virt_base=hex(virt_base),
-                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, gmu_firmware=gmu_firmware, size=len(out),
+                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, **firmware_info, size=len(out),
                 segs=[(s['name'], hex(s['vmaddr']), hex(s['vmsize'])) for s in segs])
     return bytes(out), info
 
@@ -217,8 +232,11 @@ if __name__ == '__main__':
     ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
     ap.add_argument('--gmu-firmware', help='verified peridot GMU image, carried as reserved payload memory')
+    ap.add_argument('--sqe-firmware', help='verified peridot SQE image, reserved transport only')
+    ap.add_argument('--zap-firmware', help='verified peridot ZAP image, reserved transport only')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk, a.gmu_firmware)
+    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk, a.gmu_firmware,
+                       a.sqe_firmware, a.zap_firmware)
     open(a.out, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':

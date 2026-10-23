@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### Verified SQE/ZAP boot transport prepared (host only)
+
+- tools/mkpayload.py accepts optional --sqe-firmware/--zap-firmware alongside
+  GMU. Exact observed lengths/SHA256 are mandatory. Each image gets its own
+  reserved16KiB-rounded segment and PeridotSQEFirmware/PeridotZAPFirmware
+  memory-map descriptor; kernel_end reserves all backing before VM startup.
+- Actual private three-image payload packed successfully with0138 kernel;
+  artifact is work/firmware-transport0140.payload outside Git. No new device
+  boot or SCM authentication was performed with it. Existing GMU-only callers
+  remain compatible;0139 uses its original GMU-only image for isolation.
+- SQE is66036B; KGSL adreno_get_firmware skips its first4-byte file header
+  before placing code in a GPU-read-only allocation. ZAP is12088B/ELF32;
+  prior plan uses PAS13,4044B NC metadata and the actual reserved carveout
+  0x9899a000/0x2000. GPU upload/authentication and CP boot still unfinished.
+
 ### 0139 START-time allocation implementation; 0138b longer UI observation
 
 - Mode19 retains proven0138 setup, then sends START10 and handles real
