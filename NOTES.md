@@ -4,6 +4,52 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0115 hardware result + 0116 hub-RCG stage (2026-10-23, autonomous)
+
+- The phone was already in fastboot with the BCB still at boot-recovery
+  from the 0114 cycle, so the image was booted directly and the timed60s
+  diagnostic reset returned it to recovery; console pulled to
+  research/diagnostics-20261022/cycle-0115-ahb/ (flush52, 135384 bytes,
+  57 PERIDOT lines).
+- Mode1 handoff values are byte-identical to the 0112 inventory in this
+  handoff; no drift between cycles.
+- CX hold PASS (domain powered while the probe ran) and everything was
+  restored: CX/GX0x22f801, hw0x2800010a, ownership kept. The AHB gate leg
+  FAILED cleanly: writes of bit0 to GPUCC0x90c8 never read back over the
+  bounded50ms poll, so the original value was restored. Console:
+  `AHB gate test FAIL AHB gate never switched on; original value restored;
+  CX=0x22f801 hw=0x2800010a GX=0x22f801 AHB=0`. iOS (Goodix, RPMH votes,
+  heartbeats) continued through the window.
+- The CC-live callback of0115 fires only after a verified gate, so that
+  boot produced no live inventory. 0116 takes the live snapshot
+  unconditionally.
+- Root cause prepared offline: gpu_cc_ahb_clk's parent is the hub RCG
+  gpu_cc_hub_clk_src (cmd0x919c, cfg0x91a0), whose cmd/cfg read0/0 (never
+  updated) at handoff. clk-rcg2.c in
+  research/diagnostics-20261022/linux-ref shows CMD bit0 UPDATE
+  self-clears after CFG latches, CFG sel bits10:8, pre_div bits4:0 written
+  directly, is_enabled = ROOT_OFF cleared. The hub's only freq_tbl entry
+  is F(200MHz, GPLL0_OUT_MAIN, 3) -> cfg0x503. The GMU RCG
+  (0x9168/0x916c) is parked at0x80000000 and is not on this path.
+- New patch 0116-peridot-cx-hub-clock-stage.patch (peridotgpu=4): CX
+  hold, unconditional CC-live1, hub cfg0x503 + UPDATE with bounded poll
+  and readback, CC-live2, the same AHB gate retry, hold, then restore
+  gate, hub cfg/cmd and CX collapse. Refusals: unknown gate bits,
+  unknown/busy/dirty/parked RCG cmd, hardware-controlled or unknown cfg
+  bits, all before any write. Result codes HUB_UPDATE_TIMEOUT and
+  HUB_RESTORE_TIMEOUT were added; a hub restore is verified by the cfg
+  readback while its update trigger is best effort.
+- Host check (ASan/UBSan) PASS for both stages: 8-write full restore,
+  zero-write refusal matrix for RCG shapes, gate retry after the hub
+  update, update-poll and restore rollbacks, ownership changes and the
+  hold cap. Patch applies/reverses cleanly on the 0115 buildtree; xnu-cc
+  cross-compile 0of1 files failed.
+- CI run for commit 6443f04: 39875590980. NEXT: build
+  shim-boot-0116-hub.img (peridotgpu=4 sweetgpuhold=100 sweetdiagreset=60),
+  run tools/peridot-cycle.py from recovery, then compare both CC-live
+  snapshots: does hub cfg read0x503, does cmd update self-clear, and does
+  0x90c8 bit0 stick once the parent runs.
+
 ### 0115 preparation (2026-10-23, continued from the 0114 handoff; phone still on ordinary0113)
 
 - New patch xnu/patches/0115-peridot-cx-ahb-clock-stage.patch adds peridotgpu=3:

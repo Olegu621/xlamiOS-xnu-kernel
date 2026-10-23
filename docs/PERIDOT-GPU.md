@@ -122,14 +122,23 @@ as a shortcut.
    **0114 / `peridotgpu=2`: hardware PASS** for a bounded idle-CX power pulse,
    restoring its original collapsed state. GX unchanged; no firmware, clocks,
    rail votes, core/GMU/SMMU access. Configured diagnostic reset required.
-   **0115 / `peridotgpu=3` (built, hardware pending):** holds that
-   previously collapsed CX domain live and toggles ONLY the configuration
-   AHB gate at GPUCC0x90c8 (BRANCH_HALT_DELAY class, so the enable bit
-   readback is the check and the status bit is ignored). sweetgpuhold
-   (25..1000, default100, stage cap200 ms) bounds the window; the gate is
-   restored and CX collapsed again with the same bounded refusal, restore
-   and ownership rules as 0114. Readbacks go to the console for contrast
-   with the 0112 inventory. No GMU, GPU core, SMMU, RCG or vote access.
+   **0115 / `peridotgpu=3`: hardware result is a clean negative.** The CX
+   hold completed and was restored exactly (0x22f801, ownership kept); the
+   mode1 inventory matched the0112 values; the image stayed usable through
+   the timed reset. The configuration AHB gate write did NOT stick: 0x90c8
+   bit0 never read back during the bounded50ms poll, so the stage restored
+   the original value and reported AHB_ON_TIMEOUT. The live-window report
+   only ran after a verified gate, so0115 produced no CC-live lines. The
+   gate's parent is the hub RCG (0x919c cmd /0x91a0 cfg), never updated
+   before (0/0); the GMU RCG is explicitly parked (0x80000000) and is not
+   on this path. **0116 / `peridotgpu=4` (offline build PASS, CI pending):**
+   holds CX, programs the hub RCG to its only DT frequency (200MHz from
+   GPLL0_OUT_MAIN /3, cfg0x503, CMD update polled until it self-clears),
+   retries the same AHB gate, and prints the live GPUCC inventory before
+   and after the hub update (CC-live1/2) even when the gate still refuses.
+   Restore order is gate, RCG, CX; unknown/busy/parked RCG state and a
+   hardware-controlled cfg are refused before any write. No GMU, GPU core,
+   SMMU, XO or vote access.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU
