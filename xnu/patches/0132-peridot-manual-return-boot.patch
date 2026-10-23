@@ -1,0 +1,20 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -1039,12 +1039,15 @@
+ 	}
+ 	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16) {
+ 		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16);
+-		uint32_t reset = 0;
++		uint32_t reset = 0, manual = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+-		if (reset < 30 || reset > 3600) {
++		PE_parse_boot_argn("peridotmanual", &manual, sizeof(manual));
++		if ((reset < 30 || reset > 3600) && !(mode == 16 && manual == 1 && reset == 0)) {
+ 			printf("PERIDOT GPU: SMMU inventory refused: diagnostic reset timer required\n");
+ 			return;
+ 		}
++		if (manual == 1 && reset == 0)
++			printf("PERIDOT GPU: manual-return boot; no diagnostic reset timer\n");
+ 		static const unsigned sels[] = {
+ 			0x16, 0x1d, 0x1e, 0x2d, 0x1f, 0x21, 0x0b, 0x0e
+ 		};

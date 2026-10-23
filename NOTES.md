@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0131 PASS and user-requested manual-return images (2026-10-23)
+
+- CI39951397770 SUCCESS/da6291a, cycle0131 imageSHA
+  40906ddaa1e47d88393864dfad9cf863dd3dc0b77532fc0c431837c6c6154f38.
+- Firmware parse0/15; owned HFI81920B allocation5CPU pages/physical36=1;
+  HFI17 init0/layout1/pages20. Table/data allocations also verify physical36.
+  Automatic recovery/log capture succeeded. No panic found.
+- User explicitly requests next image remain running without automatic reset.
+  0132 allows mode16 with peridotmanual=1/sweetdiagreset=0. New build0132.py
+  sets sweetpanicreset=0 and sweetdiagreset=0. Do not run this image through
+  the automatic-return cycle; boot only and expect manual recovery later.
+- Other old diagnostic modes retain their timer guard. Mode16 releases its
+  temporary allocations and restores clocks; firmware/HFI still not running.
+
 ### 0130 hardware result and 0131 allocator fix (2026-10-23)
 
 - CI39948057276 SUCCESS,9e3d6cf. Image SHA256
