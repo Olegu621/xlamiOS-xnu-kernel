@@ -75,6 +75,9 @@ def main():
          '\tif (trace_left > 0 && getenv("PERIDOT_VERIFIED_CACHE_HOOKS")) {\n\t\tsgl_install_fmt_hook();')
     edit(mesa / 'src/freedreno/meson.build', "if system_has_kms_drm\n  subdir('drm')\n",
          "if system_has_kms_drm or host_machine.system() == 'darwin'\n  subdir('drm')\n")
+    # This build selects only MSM, with calls provided by our IOKit facade.
+    # The virtual DRM library is neither available nor used on Darwin.
+    edit(mesa / 'src/freedreno/drm/meson.build', 'link_with : [libvdrm],', 'link_with : [],')
     edit(mesa / 'src/freedreno/drm/freedreno_bo.c', '#include "freedreno_priv.h"\n',
          '#include "freedreno_priv.h"\n'
          '#ifdef __APPLE__\nvoid *sweet_drm_bo_map(int fd, uint64_t offset);\n'
