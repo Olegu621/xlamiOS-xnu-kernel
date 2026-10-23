@@ -2,7 +2,7 @@
 
 ## >>> xlamiOS: the PERIDOT port (POCO F6 / SM8635). The sweet notes below are HISTORY/REFERENCE. <<<
 
-## Active handoff (peridot, 2026-10-22, Codex continuation)
+## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 ### 0139 START-time allocation implementation; 0138b longer UI observation
 
@@ -23,12 +23,20 @@
   trace155 consumes its notification. START ACK requires exact request/result.
   Existing reset/drain/context shutdown remains; unexpected live GX panics
   retaining clocks and resources. All backing stays pinned until reboot.
-- Exact0138 patch application checked.0139 compilation/device behavior pending.
+- Exact0138 patch application checked. CI39987869394 builds6a0549b;
+  0139 compilation/device behavior pending.
   No GPU OOB/SQE/ZAP/CP startup or GPU submission implemented in this patch.
 - User observed only Apple logo on0138 and suggested60s was too short. Same
   kernel/image configuration is now temporarily running as0138b with timer180,
   imageSHA c957dfee99ab5d705ad5fdcf9789b1509cb3457e1eeb728d38616acb24b97242.
-  cycle0138b console and user observation pending; no partitions flashed.
+  User explicitly confirms lock screen or home screen visible on0138b, looking
+  as before. Thus the earlier60s observation was insufficient to rule out UI
+  startup; keep180s in subsequent automatic diagnostic images. cycle0138b
+  returned automatically and captured3098 console lines, SHA256
+  f3df58dda2ed8bb2038b3f2d63fbf0d7eb43bb40c7c4539e8726e98497b5e6ae.
+  All9 HWSCHED ACKs repeated,16 framebuffer swaps,664 touch reports/drops0,
+  timed reset180 confirmed.42 accelerator matching attempts still find none.
+  No partitions flashed. GPU command/rendering evidence remains absent.
 - User supplied AdrenoToolsDrivers v24.3.0_r2. Actual Android ELF inspected;
   primary Mesa MR30379/30431 diffs read. Verified intended Mesa25.0.7 already
   contains FD735 and host-page-size-aware BO/Vulkan IOVA alignment. Details in

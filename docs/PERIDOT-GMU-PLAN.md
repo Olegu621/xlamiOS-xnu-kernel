@@ -114,7 +114,10 @@ each return1/error0. Nine exact requests were acknowledged. GX remained
 collapsed, reset/drain/context disable completed and recovery returned.
 SpringBoard/backboardd execute, but repeated IOAcceleratorES/Legacy matching
 finds no service; the user's screen observation was Apple logo only at60s.
-The same kernel is also being observed with a180s diagnostic timer.
+The same kernel was also booted with a180s diagnostic timer. The user explicitly
+confirmed a visible iOS lock screen or home screen, looking as before. The
+earlier60s screen observation therefore did not rule out eventual UI startup.
+Keep180s in subsequent images. This observation does not prove GPU rendering.
 
 0139 introduces START's actual allocation/reply phase, with retained NC
 buffers, append-only native4K mappings, bounded ASID synchronization and an
