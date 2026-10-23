@@ -4,6 +4,26 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0129 SID5 hardware PASS (2026-10-23)
+
+- CI39941940879 SUCCESS, b95a64c. Windows cycle0129 captured console.
+  Image SHA2564bda39a0e6a55556c4bc04a398623db57710f4002ada14862e057828a070c267.
+- Bank0 enabled/readback verified; SMR0=0x80000005/S2CR0=0,
+  SID5 attach readback1 and GFSR0. CM3 remained reset. Quarantine1,
+  slot restored1, bank disabled_verified1/sync1/retain0. No panic found.
+- This verifies routing REGISTER state, not a GMU-issued memory transaction.
+- Subsequent integration is a complete firmware/memory/HFI startup path,
+  with selectable checkpoints, not another single-register-only diagnostic.
+- New protocol finding: Qualcomm gen7_11_0 uses HWSCHED (17 HFI queues,
+  14 dispatch queues). Simple UniXNU3-queue HFI transport cannot be assumed
+  compatible. qtbl sizeof is210 dwords, headers at dword6/stride12;
+  queue data begins at byte848 (16-byte-aligned840), each queue4096B.
+  Initial allocation rounds70488 requested bytes to73728 (18 native4K).
+- Firmware external ranges in work/gmu-memory-plan.json cover105 pages;
+  additional HFI/log/runtime memory must also be allocated and mapped.
+- Goal remains hardware-accelerated iOS. GMU startup and actual GPU command
+  execution are still unverified and unimplemented in the current kernel.
+
 ### 0128 hardware and 0129 route preparation (2026-10-23)
 
 - CI39940642998 SUCCESS,8a395c2. Image SHA256
