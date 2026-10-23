@@ -4,6 +4,27 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0144 actual driver loading PASS; compositor context crashes, UI NOT reached
+
+- Kernel CI40013951646/3930358 SUCCESS, temporary imageSHA
+  0e0b08b6d58cae8cb724eced54f1cc065e82626f180714bf20127205751aaca6.
+  Full180s cycle returned automatically; consoleSHA
+  941a3a8f924a8cea23824cce1051deb9689e59fbd25e548ebbfaa34ec9575afb.
+- User CORRECTED the initial screen reply: CURRENT0144 showed ONLY LOGS.
+  Do not carry forward the earlier lock/home reply as0144 UI success.
+- Exact boot library15234848B created/read back, dyld environment applied,
+  EAGL shim installed. Actual PeridotGPU matching/open0, FD735 screen created.
+  backboardd repeatedly crashes at pc0 before rendering any frame; no user
+  batches/fences/flush stats or accelerated pixels are proven by this boot.
+- Symbolized actual Mach-O: base103b1c000, LR103d389ac ->21c9ac,
+  st_api_create_context+27c. The preceding instruction calls NULL
+  pipe_frontend_screen.get_param (offset18); pinned Mesa st_manager.c1043
+  invokes it unconditionally. The upstream frontend never initialized it.
+-0145 fixes this required callback with the genuine surfaceless/FBO
+  invalidation contract, adds allocation cleanup/context-created logging and
+  preserves a symbol map. Reuse compiled0144 kernel with a newly verified
+  versioned GLES payload; no kernel/partition flash needed. Build pending.
+
 
 ### 0143 HARDWARE PASS: IOKit service registered, engine held for180s
 

@@ -68,6 +68,38 @@ def main():
     # Use the actual peridot identity. No A530 import-pitch workaround is added.
     edit(front / 'sweet_drm.c', 'p->value = 530;', 'p->value = 735;')
     edit(front / 'sweet_drm.c', 'IOServiceMatching("SweetGPU")', 'IOServiceMatching("PeridotGPU")')
+    # Mesa 25 calls get_param unconditionally after creating its state tracker.
+    # The surfaceless frontend owns FBO attachments explicitly and needs no
+    # legacy window-system invalidation on glViewport.
+    edit(front / 'sweetgl.c', 'bool\nsweetgl_init(void)\n',
+         'static int\n'
+         'sweetgl_frontend_param(struct pipe_frontend_screen *screen,\n'
+         '    enum st_manager_param param)\n'
+         '{\n'
+         '\t(void)screen;\n'
+         '\tswitch (param) {\n'
+         '\tcase ST_MANAGER_BROKEN_INVALIDATE:\n'
+         '\t\treturn 0;\n'
+         '\t}\n'
+         '\treturn 0;\n'
+         '}\n\n'
+         'bool\nsweetgl_init(void)\n')
+    edit(front / 'sweetgl.c', '\t\t\t\tfscreen->screen = screen;',
+         '\t\t\t\tif (fscreen == NULL) {\n'
+         '\t\t\t\t\tscreen->destroy(screen);\n'
+         '\t\t\t\t\tclose(fd);\n'
+         '\t\t\t\t\tpthread_mutex_unlock(&init_lock);\n'
+         '\t\t\t\t\treturn false;\n'
+         '\t\t\t\t}\n'
+         '\t\t\t\tfscreen->screen = screen;\n'
+         '\t\t\t\tfscreen->get_param = sweetgl_frontend_param;')
+    edit(front / 'sweetgl.c', '\tc->st = st;',
+         '\tif (c == NULL) {\n'
+         '\t\tst_destroy_context(st);\n'
+         '\t\treturn NULL;\n'
+         '\t}\n'
+         '\tsweet_drm_log("sweetgl: GLES %d context created", attribs.major);\n'
+         '\tc->st = st;')
     # Fixed shared-cache addresses belong to a different restore. Build the
     # generic EAGL path with these optional hooks disabled pending our ABI audit.
     edit(front / 'eagl.c', '\tsgl_install_texfns();',
@@ -195,6 +227,8 @@ def main():
         ['-framework', 'IOKit', '-framework', 'CoreFoundation', '-framework', 'IOSurface',
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
+    (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
+    provenance['frontend_revision'] = 'peridot-0145-required-manager-callback'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout
