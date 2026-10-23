@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0126 hardware PASS (2026-10-23)
+
+- CI39936992354 SUCCESS, commita427e91. Artifact kernel hash verified.
+- Temporary boot from this Windows PC, peridotgpu=12, diagnostic reset60s.
+  Image SHA2562d036897ad79de2984bf6ea1558dd15dfd20a962c7f554ca755cd402c281d42f.
+- Captured work/cycle0126/console.txt: native4K inactive tables status=0
+  walk=1 pages=3 leaves=4. Four4KiB mappings over real contiguous XNU
+  allocations independently walked successfully. Allocations released.
+- Phone automatically returned to recovery. No panic line in saved log.
+- This verifies CPU-side allocation/table construction only; no installed
+  SMMU context, device-side translation, GMU firmware or GPU execution yet.
+- Next integration: publish retained tables/data with physical cache clean,
+  encode stage1 context against measured ID0/ID2, install/readback a leased
+  disabled bank with fault handling/TLB sync, then attach SID5 with CM3 reset.
+
 ### 0126 inactive table allocation and walk (2026-10-23)
 
 - New peridotgpu=12 path allocates separate physically contiguous16KiB
