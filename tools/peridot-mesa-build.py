@@ -67,6 +67,7 @@ def main():
         provenance['frontend_sources'][name] = fetch(url, front / name)
     # Use the actual peridot identity. No A530 import-pitch workaround is added.
     edit(front / 'sweet_drm.c', 'p->value = 530;', 'p->value = 735;')
+    edit(front / 'sweet_drm.c', 'IOServiceMatching("SweetGPU")', 'IOServiceMatching("PeridotGPU")')
     # Fixed shared-cache addresses belong to a different restore. Build the
     # generic EAGL path with these optional hooks disabled pending our ABI audit.
     edit(front / 'eagl.c', '\tsgl_install_texfns();',
@@ -151,7 +152,7 @@ def main():
             'src/compiler/glsl/libglsl.a', 'src/compiler/glsl/glcpp/libglcpp.a',
             'src/compiler/nir/libnir.a', 'src/compiler/spirv/libvtn.a', 'src/compiler/libcompiler.a',
             'src/mapi/glapi/libglapi_bridge.a', 'src/mapi/shared-glapi/libglapi.a',
-            'src/util/libxmlconfig.a', 'src/util/libmesa_util.a',
+            'src/util/libxmlconfig.a', 'src/util/libmesa_util.a', 'src/util/libmesa_util_sse41.a',
             'src/util/libmesa_util_simd.a', 'src/util/blake3/libblake3.a',
             'src/c11/impl/libmesa_util_c11.a']
     # meson target metadata supplies the actual target paths for this pinned
