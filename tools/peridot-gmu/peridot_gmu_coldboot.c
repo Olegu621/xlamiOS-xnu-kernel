@@ -64,15 +64,16 @@ static bool pgcb_poll(vm_offset_t base, uint32_t off, uint32_t mask,
 }
 /* QCOM_A6 continuation state survives interrupted SMCCC calls. WAITQ_SLEEP
  * is reported to the caller; it requires a separate interrupt/resume path. */
-static int64_t pgcb_scm(uint64_t fn, uint64_t argument, uint64_t *result)
+static int64_t pgcb_scm_args(uint64_t fn, uint64_t info,
+    uint64_t first, uint64_t second, uint64_t third, uint64_t *result)
 {
     uint64_t a0 = fn, a6 = 0;
     for (unsigned n = 0; n < 64; ++n) {
         register uint64_t x0 __asm__("x0") = a0;
-        register uint64_t x1 __asm__("x1") = 1;
-        register uint64_t x2 __asm__("x2") = argument;
-        register uint64_t x3 __asm__("x3") = 0;
-        register uint64_t x4 __asm__("x4") = 0;
+        register uint64_t x1 __asm__("x1") = info;
+        register uint64_t x2 __asm__("x2") = first;
+        register uint64_t x3 __asm__("x3") = second;
+        register uint64_t x4 __asm__("x4") = third;
         register uint64_t x5 __asm__("x5") = 0;
         register uint64_t x6 __asm__("x6") = a6;
         register uint64_t x7 __asm__("x7") = 0;
@@ -88,6 +89,10 @@ static int64_t pgcb_scm(uint64_t fn, uint64_t argument, uint64_t *result)
         return (int64_t)x0;
     }
     return -110;
+}
+static int64_t pgcb_scm(uint64_t fn, uint64_t argument, uint64_t *result)
+{
+    return pgcb_scm_args(fn,1,argument,0,0,result);
 }
 static bool pgcb_allocate(struct pgcb_memory *m)
 {
@@ -236,6 +241,7 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
 }
 #include "peridot_hwsched_prepare.c"
 #include "peridot_runtime_memory.c"
+#include "peridot_gpu_boot.c"
 static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
 {
@@ -250,7 +256,7 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     uint32_t saved_smr = 0, saved_s2cr = 0;
     vm_offset_t gpu = 0, rsc = 0, pdc = 0, cc = 0;
     ArmSmmu4KRange ranges[7];
-    ArmSmmu4KConfig config = {32,36,0,mode == 19 ? 129+16384 : 129};
+    ArmSmmu4KConfig config = {32,36,0,mode >= 19 ? 129+16384 : 129};
     ArmSmmu4KResult built = {0};
     ArmSmmu4KContextConfig cfg = {0};
     ArmSmmu4KIo io = {(void *)smmu,0x40000,pgpu_ctx_read32,pgpu_ctx_read64,
@@ -268,8 +274,8 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     }
     const uint32_t addresses[] = {0x4000,0x100000,0x200000,0x300000,
         0x60000000,0x60002000,0x60020000,0,0};
-    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode == 19 ? 262144u : 65536u,262144};
-    for (unsigned i = 0; i < (mode == 19 ? 9u : 8u); ++i) {
+    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode >= 19 ? 262144u : 65536u,262144};
+    for (unsigned i = 0; i < (mode >= 19 ? 9u : 8u); ++i) {
         pgcb.memory[i].iova = addresses[i]; pgcb.memory[i].bytes = sizes[i];
         if (!pgcb_allocate(&pgcb.memory[i])) goto out;
         if (i < 7) ranges[i] = (ArmSmmu4KRange){addresses[i],pgcb.memory[i].physical,
@@ -346,8 +352,10 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     printf("PERIDOT GMU: HFI control ready=%u\n",hfi_ready);
     if (hfi_ready) exchanged = pgcb_exchange(&hfi,gmu,smmu);
     if (exchanged && mode >= 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
-    if (prepared && mode == 19)
+    if (prepared && mode >= 19)
         started = pgrt_start(&hfi,gmu,smmu,&pgcb_prepared_sequence,&built,&io,&cfg);
+    if (started && mode == 20)
+        pggx_boot(&hfi,gpu,gmu,smmu,cc,rsc,&io,&pgcb_prepared_sequence);
 out:
     pgcb_faults(gmu,smmu,"before stop");
     if (released) {

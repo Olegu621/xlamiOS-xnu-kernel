@@ -4,6 +4,40 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+
+### 0140 GPU execution phase implemented; hardware result pending
+
+- Mode20 builds on the real0139 START pass. Copies actual SQE code (skips
+  its4B file header) into owned NC memory; extends the inactive4K GPU map
+  with SQE/real power-up register list/initially-zero observation page.
+- Owns CB0/ASID1/SID0 separately from GMU CB2/SID5. Matches the actual24B
+  SMMU-info contract; writes no later context-bank extension. All backing
+  and metadata remain pinned. CPU pages remain16K.
+- Adds SM8635 gen7_11_0 register/HWCG/protect data from LineageOS commit
+  ed4ad0d1ad00b755af2fe61387dcc5397ad20b8f; uses its selected gen7_0_0
+  protected spans, not the different current Qualcomm core table. Actual
+  board GMEM1.5MiB/HBB16/MAL32/UBWC4 and previously proven QSB0x71e20.
+- Actual HFI30 default255MHz/BW1 vote, OOB wake handshake, raw HFI131
+  CP_ME_INIT, PAS13 init/memsetup/auth, unsecure switch, CP_MEM_WRITE of
+  two values into the initially-zero NC observation page. Success requires
+  actual ACK+GPU idle+no SMMU fault+both observed values, never host writes.
+- ZAP metadata is parsed from the verified self-contained image:4044B and
+  one1012B relocation. Uses only actual reserved0x9899a000/0x2000 carveout.
+  Generalized SCM retains x6 continuation and checks transport/secure result.
+- Cleanup clears OOB, sends real PREPARE_SLUMBER, waits idle, resets CM3,
+  requests/observes RSC sleep and GX collapse, quarantines SID0, disables
+  and synchronizes CB0. Unconfirmed shutdown panics while retaining clocks
+  and mappings. Parent clock restoration only follows confirmed GX collapse.
+- Patch applies to exact0139 sources with identical generated file contents.
+  CI compilation and real-device CP/ZAP/fence behavior remain pending.
+  This is bring-up code, not a claim that accelerated iOS rendering works.
+- Latest user research: UniXNU-pong51911de5 confirms UI/touch but labels
+  Adreno/Metal unconfirmed. Its iOS16 ABI notes and PAS flow are useful;
+  A730/CPU4K constants are not our A735/CPU16K policy. Termux discussion
+ 23914 reports A735 working after Mesa25.0.1 but uses existing Android GPU
+  services; its linked xMeM patches do not supply an XNU kernel backend.
+
+
 ### 0139 HARDWARE PASS: full START and ten real allocations
 
 - CI39987869394 SUCCESS/6a0549b. ImageSHA256

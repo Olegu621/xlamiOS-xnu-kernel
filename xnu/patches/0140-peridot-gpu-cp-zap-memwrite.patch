@@ -1,0 +1,775 @@
+--- a/bsd/dev/peridot_gmu_coldboot.c
++++ b/bsd/dev/peridot_gmu_coldboot.c
+@@ -64,15 +64,16 @@
+ }
+ /* QCOM_A6 continuation state survives interrupted SMCCC calls. WAITQ_SLEEP
+  * is reported to the caller; it requires a separate interrupt/resume path. */
+-static int64_t pgcb_scm(uint64_t fn, uint64_t argument, uint64_t *result)
++static int64_t pgcb_scm_args(uint64_t fn, uint64_t info,
++    uint64_t first, uint64_t second, uint64_t third, uint64_t *result)
+ {
+     uint64_t a0 = fn, a6 = 0;
+     for (unsigned n = 0; n < 64; ++n) {
+         register uint64_t x0 __asm__("x0") = a0;
+-        register uint64_t x1 __asm__("x1") = 1;
+-        register uint64_t x2 __asm__("x2") = argument;
+-        register uint64_t x3 __asm__("x3") = 0;
+-        register uint64_t x4 __asm__("x4") = 0;
++        register uint64_t x1 __asm__("x1") = info;
++        register uint64_t x2 __asm__("x2") = first;
++        register uint64_t x3 __asm__("x3") = second;
++        register uint64_t x4 __asm__("x4") = third;
+         register uint64_t x5 __asm__("x5") = 0;
+         register uint64_t x6 __asm__("x6") = a6;
+         register uint64_t x7 __asm__("x7") = 0;
+@@ -88,6 +89,10 @@
+         return (int64_t)x0;
+     }
+     return -110;
++}
++static int64_t pgcb_scm(uint64_t fn, uint64_t argument, uint64_t *result)
++{
++    return pgcb_scm_args(fn,1,argument,0,0,result);
+ }
+ static bool pgcb_allocate(struct pgcb_memory *m)
+ {
+@@ -236,6 +241,7 @@
+ }
+ #include "peridot_hwsched_prepare.c"
+ #include "peridot_runtime_memory.c"
++#include "peridot_gpu_boot.c"
+ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
+     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
+ {
+@@ -250,7 +256,7 @@
+     uint32_t saved_smr = 0, saved_s2cr = 0;
+     vm_offset_t gpu = 0, rsc = 0, pdc = 0, cc = 0;
+     ArmSmmu4KRange ranges[7];
+-    ArmSmmu4KConfig config = {32,36,0,mode == 19 ? 129+16384 : 129};
++    ArmSmmu4KConfig config = {32,36,0,mode >= 19 ? 129+16384 : 129};
+     ArmSmmu4KResult built = {0};
+     ArmSmmu4KContextConfig cfg = {0};
+     ArmSmmu4KIo io = {(void *)smmu,0x40000,pgpu_ctx_read32,pgpu_ctx_read64,
+@@ -268,8 +274,8 @@
+     }
+     const uint32_t addresses[] = {0x4000,0x100000,0x200000,0x300000,
+         0x60000000,0x60002000,0x60020000,0,0};
+-    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode == 19 ? 262144u : 65536u,262144};
+-    for (unsigned i = 0; i < (mode == 19 ? 9u : 8u); ++i) {
++    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode >= 19 ? 262144u : 65536u,262144};
++    for (unsigned i = 0; i < (mode >= 19 ? 9u : 8u); ++i) {
+         pgcb.memory[i].iova = addresses[i]; pgcb.memory[i].bytes = sizes[i];
+         if (!pgcb_allocate(&pgcb.memory[i])) goto out;
+         if (i < 7) ranges[i] = (ArmSmmu4KRange){addresses[i],pgcb.memory[i].physical,
+@@ -346,8 +352,10 @@
+     printf("PERIDOT GMU: HFI control ready=%u\n",hfi_ready);
+     if (hfi_ready) exchanged = pgcb_exchange(&hfi,gmu,smmu);
+     if (exchanged && mode >= 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
+-    if (prepared && mode == 19)
++    if (prepared && mode >= 19)
+         started = pgrt_start(&hfi,gmu,smmu,&pgcb_prepared_sequence,&built,&io,&cfg);
++    if (started && mode == 20)
++        pggx_boot(&hfi,gpu,gmu,smmu,cc,rsc,&io,&pgcb_prepared_sequence);
+ out:
+     pgcb_faults(gmu,smmu,"before stop");
+     if (released) {
+--- a/bsd/dev/peridot_hwsched_prepare.c
++++ b/bsd/dev/peridot_hwsched_prepare.c
+@@ -65,6 +65,7 @@
+ }
+ 
+ static unsigned pgcb_prepared_sequence;
++static bool pgcb_dms_enabled;
+ static bool pgcb_hwsched_prepare(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
+ {
+     unsigned sequence = 1, acknowledged = 0;
+@@ -94,6 +95,7 @@
+             continue;
+         }
+         if (!ok) return false;
++        if (features[i][1] == 27) pgcb_dms_enabled = true;
+         ++acknowledged;
+     }
+     const uint32_t core_start[] = {14u | (2u<<8),0};
+--- /dev/null
++++ b/bsd/dev/peridot_gpu_boot.c
+@@ -0,0 +1,318 @@
++/* SPDX-License-Identifier: MIT */
++/* One owned gen7_11_0 cold GPU session. SM8635 KGSL register/PM4 contracts:
++ * LineageOS ed4ad0d1ad00b755af2fe61387dcc5397ad20b8f; Linux qcom_mdt_load
++ * and qcom_scm PAS13. All backing survives errors and stays pinned to reboot.
++ * HFI completion alone is insufficient: the final CPU observation must find
++ * two GPU-written values in an initially zero, separately owned NC page. */
++#include "peridot_gen7_board.h"
++static struct {
++    struct pgcb_memory sqe, reglist, fence, metadata;
++    ArmSmmu4KConfig config;
++    ArmSmmu4KContextConfig context;
++    uint32_t sqe_va, reglist_va, fence_va, saved_smr, saved_s2cr;
++    uint32_t zap_file, zap_bytes, zap_memory;
++    const uint8_t *zap;
++    bool context_owned, routed, oob_issued, oob_ack, cp_ready, zap_ready, completed;
++} pggx;
++
++static uint32_t pggx_read(vm_offset_t gpu, vm_offset_t gmu, uint32_t word)
++{
++    if (word >= 0x1a000) return pgcb_gread(gmu,word);
++    if (word >= 0x10000) panic("PERIDOT GPU register outside owned mapping");
++    return pgcb_read(gpu,word*4);
++}
++static void pggx_write(vm_offset_t gpu, vm_offset_t gmu, uint32_t word, uint32_t value)
++{
++    if (word >= 0x1a000) { pgcb_gwrite(gmu,word,value); return; }
++    if (word >= 0x10000) panic("PERIDOT GPU register outside owned mapping");
++    pgcb_write(gpu,word*4,value);
++}
++static const uint8_t *pggx_firmware(const char *name, uint64_t expected)
++{
++    DTEntry map, chosen; const uint64_t *region, *base, *size;
++    unsigned n = 0;
++    if (SecureDTLookupEntry(NULL,"/chosen/memory-map",&map) != kSuccess ||
++        SecureDTGetProperty(map,name,(const void **)&region,&n) != kSuccess || n != 16 ||
++        SecureDTLookupEntry(NULL,"/chosen",&chosen) != kSuccess ||
++        SecureDTGetProperty(chosen,"dram-base",(const void **)&base,&n) != kSuccess || n != 8 ||
++        SecureDTGetProperty(chosen,"dram-size",(const void **)&size,&n) != kSuccess || n != 8)
++        return NULL;
++    uint64_t pa = region[0], bytes = region[1], rounded = (bytes+16383)&~UINT64_C(16383);
++    if ((pa & 16383) || bytes != expected || pa < *base || pa-*base > *size ||
++        rounded > *size-(pa-*base)) return NULL;
++    return (const uint8_t *)ml_static_ptovirt(pa);
++}
++static uint32_t pggx_u32(const uint8_t *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
++}
++static uint16_t pggx_u16(const uint8_t *p)
++{
++    return (uint16_t)p[0] | ((uint16_t)p[1]<<8);
++}
++/* Accept only the captured self-contained ELF32 image, including its header,
++ * signature and one relocatable PT_LOAD. No split-file or address guessing. */
++static bool pggx_prepare_zap(void)
++{
++    const uint8_t *fw = pggx_firmware("PeridotZAPFirmware",12088);
++    if (!fw || pggx_u32(fw) != 0x464c457f || fw[4] != 1 || fw[5] != 1 ||
++        fw[6] != 1 || pggx_u16(fw+16) != 2 || pggx_u16(fw+18) != 164 || pggx_u32(fw+20) != 1 ||
++        pggx_u16(fw+40) != 52 || pggx_u16(fw+42) != 32 || pggx_u16(fw+44) != 3)
++        return false;
++    uint32_t ph = pggx_u32(fw+28);
++    if (ph < 52 || ph > 12088-96) return false;
++    uint32_t head = 0, hash = 0, hash_size = 0, loads = 0;
++    for (unsigned i = 0; i < 3; ++i) {
++        const uint8_t *p = fw+ph+i*32;
++        uint32_t type=pggx_u32(p), offset=pggx_u32(p+4), address=pggx_u32(p+12);
++        uint32_t file=pggx_u32(p+16), memory=pggx_u32(p+20), flags=pggx_u32(p+24);
++        if (offset > 12088 || file > 12088-offset) return false;
++        if (i == 0) {
++            if (type == 1 || offset || file < ph+96 || file > 4096) return false;
++            head = file;
++        } else if ((flags & 0x07000000) == 0x02000000) {
++            if (hash_size || type == 1 || !file) return false;
++            hash = offset; hash_size = file;
++        } else if (type == 1) {
++            if (++loads != 1 || !(flags & 0x08000000) || !file || file > memory ||
++                memory > 4096 || (address & 4095)) return false;
++            pggx.zap_file=offset; pggx.zap_bytes=file; pggx.zap_memory=memory;
++        } else return false;
++    }
++    if (loads != 1 || head != 148 || hash_size != 3896 || head+hash_size != 4044)
++        return false;
++    pggx.metadata.bytes = 4096;
++    if (!pgcb_allocate(&pggx.metadata)) return false;
++    bcopy(fw,pggx.metadata.cpu,head);
++    bcopy(fw+hash,(uint8_t *)pggx.metadata.cpu+head,hash_size);
++    __asm__ volatile("dsb sy" ::: "memory");
++    pggx.zap = fw;
++    printf("PERIDOT GPU: ZAP parsed metadata=4044 load=%u memory=%u reserved=0x9899a000/0x2000\n",
++        pggx.zap_bytes,pggx.zap_memory);
++    return true;
++}
++static bool pggx_buffer(struct pgcb_memory *m, uint32_t bytes,
++    unsigned permissions, uint32_t *va)
++{
++    if (!bytes || bytes > 0x100000 || pggx.context_owned) return false;
++    m->bytes = (bytes+4095)&~4095u;
++    if (!pgrt_reserve(&pgrt.gpu_next,m->bytes,65536,0x44000000,va) || !pgcb_allocate(m)) return false;
++    ArmSmmu4KRange range = {*va,m->physical,m->bytes,permissions,0,2};
++    return pgrt_map_new(&pgcb.memory[8],&pgrt.gpu_tables,&range);
++}
++static bool pggx_prepare(const ArmSmmu4KIo *io, vm_offset_t smmu)
++{
++    const uint8_t *sqe = pggx_firmware("PeridotSQEFirmware",66036);
++    if (!sqe || !pggx_prepare_zap() ||
++        !pggx_buffer(&pggx.sqe,66032,ArmSmmu4KRead|ArmSmmu4KPrivileged|ArmSmmu4KExecute,&pggx.sqe_va) ||
++        !pggx_buffer(&pggx.reglist,4096,ArmSmmu4KRead|ArmSmmu4KWrite|ArmSmmu4KPrivileged,&pggx.reglist_va) ||
++        !pggx_buffer(&pggx.fence,4096,ArmSmmu4KRead|ArmSmmu4KWrite,&pggx.fence_va)) return false;
++    bcopy(sqe+4,pggx.sqe.cpu,66032);
++    __asm__ volatile("dsb sy" ::: "memory");
++    if (bcmp(sqe+4,pggx.sqe.cpu,66032)) return false;
++    pggx.config = (ArmSmmu4KConfig){32,36,pgcb.memory[8].physical,16384};
++    pggx.context.lower=&pggx.config; pggx.context.lower_tables=&pgrt.gpu_tables;
++    pggx.context.asid=1; pggx.context.id0=pgcb_read(smmu,0x20); pggx.context.id2=pgcb_read(smmu,0x28);
++    /* This boot's initial full-SMMU inventory proved all streams invalid.
++     * Recheck the exact new bank/slot before obtaining this separate lease. */
++    pggx.saved_smr=pgcb_read(smmu,0x804); pggx.saved_s2cr=pgcb_read(smmu,0xc04);
++    if ((pggx.saved_smr & 0x80000000u) || (pgcb_read(smmu,0x20000) & 1)) return false;
++    ArmSmmu4KContextImage image = {0};
++    if (ArmSmmu4KEncodeContext(&pggx.context,&image) != ArmSmmu4KSuccess) return false;
++    unsigned info = 0;
++    for (unsigned i=0; i<pgrt.count; ++i) {
++        struct pgrt_buffer *b=&pgrt.buffers[i];
++        if (b->requested[3] != 3) continue;
++        /* The installed firmware requests exactly24 bytes, before the later
++         * context_bank extension. Never write past that logical contract. */
++        if (++info != 1 || b->requested[7] != 24 || b->memory.bytes < 24) return false;
++        volatile uint32_t *v=b->memory.cpu;
++        v[0]=0x241350d5; v[1]=0; v[2]=(uint32_t)image.ttbr0;
++        v[3]=(uint32_t)(image.ttbr0>>32); v[4]=0xdecafbad; v[5]=0;
++    }
++    if (info != 1) return false;
++    __asm__ volatile("dsb sy" ::: "memory");
++    pgcb_save_write(smmu,0x20004,0x32b);
++    if (pgcb_read(smmu,0x20004) != 0x32b) return false;
++    ArmSmmu4KProgramResult programmed={0};
++    ArmSmmu4KStatus status=ArmSmmu4KProgramDisabledContext(io,0,&pggx.context,10000,&programmed);
++    pggx.context_owned=programmed.must_retain_tables != 0;
++    printf("PERIDOT GPU: CB0 activate=%u enabled=%u readback=%u SQE=%#x bytes=66032 fence=%#x\n",
++        status,programmed.enabled,programmed.readback_valid,pggx.sqe_va,pggx.fence_va);
++    if (status != ArmSmmu4KSuccess) return false;
++    pgcb_write(smmu,0xc04,0); pgcb_write(smmu,0x804,0x80000000u); pggx.routed=true;
++    return pgcb_read(smmu,0xc04) == 0 && pgcb_read(smmu,0x804) == 0x80000000u;
++}
++static void pggx_registers(vm_offset_t gpu, vm_offset_t gmu)
++{
++#define GXW(r,v) pggx_write(gpu,gmu,(r),(v))
++    for (unsigned i=0;i<sizeof(pggx_gbif)/sizeof(pggx_gbif[0]);++i) GXW(pggx_gbif[i][0],pggx_gbif[i][1]);
++    /* Preserve the board QSB values already exercised by the GMU session. */
++    for (unsigned i=0;i<4;++i) GXW(GEN7_GBIF_QSB_SIDE0+i,0x71e20);
++    GXW(GEN7_UCHE_GBIF_GX_CONFIG,0x10240e0);
++    GXW(GEN7_RBBM_PERFCTR_GPU_BUSY_MASKED,UINT32_MAX);
++    GXW(GEN7_UCHE_TRAP_BASE_LO,0xfffff000); GXW(GEN7_UCHE_TRAP_BASE_HI,0x1ffff);
++    GXW(GEN7_UCHE_WRITE_THRU_BASE_LO,0xfffff000); GXW(GEN7_UCHE_WRITE_THRU_BASE_HI,0x1ffff);
++    GXW(GEN7_UCHE_GMEM_RANGE_MIN_LO,0x1000000); GXW(GEN7_UCHE_GMEM_RANGE_MIN_HI,0);
++    GXW(GEN7_UCHE_GMEM_RANGE_MAX_LO,0x117ffff); GXW(GEN7_UCHE_GMEM_RANGE_MAX_HI,0);
++    GXW(GEN7_UCHE_CACHE_WAYS,0x800000); GXW(GEN7_UCHE_CMDQ_CONFIG,0x6690e);
++    /* Captured board HBB16, MAL32, UBWC4; client PF defaults to1 in KGSL. */
++    GXW(GEN7_RB_NC_MODE_CNTL,0x816); GXW(GEN7_TPL1_NC_MODE_CNTL,6);
++    GXW(GEN7_SP_NC_MODE_CNTL,0x26); GXW(GEN7_GRAS_NC_MODE_CNTL,0x60);
++    GXW(GEN7_UCHE_MODE_CNTL,0x600000); GXW(GEN7_UCHE_CLIENT_PF,0x81);
++    GXW(GEN7_RBBM_INTERFACE_HANG_INT_CNTL,0x40cfffff);
++    GXW(GEN7_RB_CMP_DBG_ECO_CNTL,pggx_read(gpu,gmu,GEN7_RB_CMP_DBG_ECO_CNTL)|(1u<<11));
++    GXW(GEN7_GPU_GMU_AO_GPU_CX_BUSY_MASK,0xff000000);
++    GXW(GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_0,
++        (pgcb_gread(gmu,GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_0)&~255u)|0x20);
++    GXW(GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_1,4); GXW(GEN7_GMU_CX_GMU_POWER_COUNTER_ENABLE,1);
++    GXW(GEN7_CP_PROTECT_CNTL,11);
++    for (unsigned i=0;i<sizeof(pggx_protect)/sizeof(pggx_protect[0]);++i) GXW(pggx_protect[i][0],pggx_protect[i][1]);
++    /* No LLCC slice lease exists. Leave its activation/control untouched. */
++    GXW(GEN7_CP_APRIV_CNTL,0x6f); GXW(GEN7_CP_BV_APRIV_CNTL,0xf);
++    GXW(GEN7_CP_CHICKEN_DBG,1); GXW(GEN7_CP_BV_CHICKEN_DBG,1);
++    GXW(GEN7_RBBM_SECVID_TSB_CNTL,0); GXW(GEN7_RBBM_SECVID_TSB_TRUSTED_BASE_LO,0xf0000000);
++    GXW(GEN7_RBBM_SECVID_TSB_TRUSTED_BASE_HI,0); GXW(GEN7_RBBM_SECVID_TSB_TRUSTED_SIZE,0x10000000);
++    for (unsigned i=0;i<sizeof(pggx_hwcg)/sizeof(pggx_hwcg[0]);++i) GXW(pggx_hwcg[i][0],pggx_hwcg[i][1]);
++    GXW(GEN7_RBBM_CLOCK_CNTL,0x8aa8aa82);
++    /* Real16-byte cpu_gpu_lock plus static register pairs, dynamic count0.
++     * Keep IFPC/preemption disabled while the first raw command is proven. */
++    uint32_t *list=pggx.reglist.cpu;
++    const unsigned ifpc=sizeof(pggx_ifpc_list)/sizeof(pggx_ifpc_list[0]);
++    const unsigned preempt=sizeof(pggx_preempt_list)/sizeof(pggx_preempt_list[0]);
++    list[3]=ifpc|(preempt<<8); unsigned next=4;
++    for (unsigned i=0;i<ifpc;++i) { list[next++]=pggx_ifpc_list[i]; list[next++]=pggx_read(gpu,gmu,pggx_ifpc_list[i]); }
++    for (unsigned i=0;i<preempt;++i) { list[next++]=pggx_preempt_list[i]; list[next++]=pggx_read(gpu,gmu,pggx_preempt_list[i]); }
++    __asm__ volatile("dsb sy" ::: "memory");
++    GXW(GEN7_CP_SQE_INSTR_BASE_LO,pggx.sqe_va); GXW(GEN7_CP_SQE_INSTR_BASE_HI,0);
++    printf("PERIDOT GPU: gen7_11_0 registers/SQE configured reglist=%#x IFPC=%u preempt=%u words=%u\n",
++        pggx.reglist_va,ifpc,preempt,next);
++#undef GXW
++}
++static uint32_t pggx_packet(unsigned opcode, unsigned words)
++{
++    unsigned a=opcode,b=words;
++    a^=a>>16; a^=a>>8; a^=a>>4;
++    b^=b>>16; b^=b>>8; b^=b>>4;
++    return 0x70000000u|words|(((0x9669u>>(b&15))&1)<<15)|(opcode<<16)|(((0x9669u>>(a&15))&1)<<23);
++}
++static bool pggx_raw(struct pg_hfi *h, vm_offset_t gpu, vm_offset_t gmu, vm_offset_t smmu,
++    uint32_t *packet, size_t words, unsigned *sequence)
++{
++    packet[0]=131u|((uint32_t)words<<8);
++    uint32_t value=0,error=0;
++    bool ack=pgcb_request(h,gmu,smmu,packet,words,sequence,true,false,&value,&error);
++    bool idle=ack && pgcb_poll(gmu,GEN7_GPU_GMU_AO_GPU_CX_BUSY_STATUS*4-0x68000,1u<<23,0,200000);
++    printf("PERIDOT GPU: raw ACK=%u idle=%u busy=%#x CB0-FSR=%#x CP-status=%#x/%#x RBBM-int=%#x\n",
++        ack,idle,pgcb_gread(gmu,GEN7_GPU_GMU_AO_GPU_CX_BUSY_STATUS),pgcb_read(smmu,0x20058),
++        pggx_read(gpu,gmu,GEN7_CP_STATUS_1),pggx_read(gpu,gmu,GEN7_CP_CP2GMU_STATUS),
++        pggx_read(gpu,gmu,GEN7_RBBM_INT_0_STATUS));
++    if (pgcb_read(smmu,0x20058)&0xc00001feu) {
++        uint64_t far=0;
++        pgpu_ctx_read64((void *)smmu,0x20060,&far);
++        printf("PERIDOT GPU: CB0 fault FAR=%#llx SYNR=%#x\n",(unsigned long long)far,pgcb_read(smmu,0x20068));
++    }
++    return idle && !(pgcb_read(smmu,0x20058)&0xc00001feu) && !pgcb_read(smmu,0x48);
++}
++static bool pggx_zap_call(uint32_t fn, uint32_t info, uint64_t b, uint64_t c)
++{
++    uint64_t result=UINT64_MAX;
++    int64_t transport=pgcb_scm_args(fn,info,13,b,c,&result);
++    printf("PERIDOT GPU: PAS13 function=%#x transport=%lld secure-result=%#llx\n",
++        fn,(long long)transport,(unsigned long long)result);
++    return !transport && !result;
++}
++static bool pggx_authenticate(void)
++{
++    if (!pggx.zap || !pggx.cp_ready ||
++        !pggx_zap_call(0x42000201,0x82,pggx.metadata.physical,0) ||
++        !pggx_zap_call(0x42000202,3,0x9899a000,4096)) return false;
++    vm_offset_t memory=ml_io_map(0x9899a000,0x2000);
++    if (!memory || ((pggx.zap_bytes|pggx.zap_memory)&3)) return false;
++    for (unsigned off=0;off<pggx.zap_memory;off+=4) {
++        uint32_t v=off<pggx.zap_bytes ? pggx_u32(pggx.zap+pggx.zap_file+off) : 0;
++        pgcb_write(memory,off,v);
++        if (pgcb_read(memory,off)!=v) return false;
++    }
++    pggx.zap_ready=pggx_zap_call(0x42000205,1,0,0);
++    return pggx.zap_ready;
++}
++static void pggx_stop(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
++    vm_offset_t cc, vm_offset_t rsc, const ArmSmmu4KIo *io, unsigned *sequence)
++{
++    if (pggx.oob_issued) {
++        pgcb_gwrite(gmu,GEN7_GMU_HOST2GMU_INTR_SET,1u<<31);
++        pgcb_gwrite(gmu,GEN7_GMU_CX_GMU_POWER_COUNTER_ENABLE,0);
++        uint32_t value=0,error=0, slumber[]={33u|(3u<<8),1,1};
++        bool ack=pgcb_request(h,gmu,smmu,slumber,3,sequence,true,false,&value,&error);
++        pgcb_gwrite(gmu,GEN7_GPU_GMU_CX_GMU_CX_FALNEXT_INTF,1);
++        bool idle=ack && pgcb_poll(gmu,GEN7_GPU_GMU_AO_GPU_CX_BUSY_STATUS*4-0x68000,1u<<30,0,100000);
++        printf("PERIDOT GPU: slumber ACK=%u idle=%u GX=%#x\n",ack,idle,pgcb_read(cc,PGPU_GX_GDSCR));
++        if (!idle) panic("PERIDOT GPU slumber unconfirmed; retaining clocks and translations");
++        pgcb_gwrite(gmu,GEN7_GMU_CM3_SYSRESET,1);
++        pgcb_gwrite(gmu,GEN7_GMU_RSCC_CONTROL_REQ,1);
++        bool sleep=pgcb_poll(rsc,0x101*4,1u<<16,1u<<16,100000);
++        if (sleep) pgcb_gwrite(gmu,GEN7_GMU_RSCC_CONTROL_REQ,0);
++        printf("PERIDOT GPU: RSC sleep=%u GX=%#x\n",sleep,pgcb_read(cc,PGPU_GX_GDSCR));
++        if (!sleep || !pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR)))
++            panic("PERIDOT GPU collapse unconfirmed; retaining clocks and translations");
++    }
++    if (pggx.routed) {
++        pgcb_write(smmu,0xc04,2u<<16); pgcb_write(smmu,0x804,pggx.saved_smr);
++        if (pgcb_read(smmu,0xc04)!=(2u<<16) || pgcb_read(smmu,0x804)!=pggx.saved_smr)
++            panic("PERIDOT GPU stream quarantine unconfirmed");
++    }
++    if (pggx.context_owned) {
++        ArmSmmu4KProgramResult stopped={0};
++        ArmSmmu4KStatus off=ArmSmmu4KDisableOwnedContext(io,0,&pggx.context,10000,&stopped);
++        printf("PERIDOT GPU: CB0 stop=%u disabled=%u sync=%u\n",off,stopped.disabled_verified,stopped.tlb_synchronized);
++        if (off!=ArmSmmu4KSuccess || stopped.must_retain_tables)
++            panic("PERIDOT GPU context stop unconfirmed; retaining clocks and translations");
++    }
++    if (pggx.routed) pgcb_write(smmu,0xc04,pggx.saved_s2cr);
++}
++static bool pggx_boot(struct pg_hfi *h, vm_offset_t gpu, vm_offset_t gmu, vm_offset_t smmu,
++    vm_offset_t cc, vm_offset_t rsc, const ArmSmmu4KIo *io, unsigned *sequence)
++{
++    if (!pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR))) return false;
++    bool prepared=pggx_prepare(io,smmu);
++    if (prepared) {
++        uint32_t value=0,error=0,vote[]={30u|(4u<<8),1,1,1};
++        prepared=pgcb_request(h,gmu,smmu,vote,4,sequence,true,false,&value,&error);
++    }
++    if (prepared) {
++        pggx.oob_issued=true;
++        pgcb_gwrite(gmu,GEN7_GMU_HOST2GMU_INTR_SET,1u<<30);
++        pggx.oob_ack=pgcb_poll(gmu,GEN7_GMU_GMU2HOST_INTR_INFO*4-0x68000,1u<<31,1u<<31,100000);
++        printf("PERIDOT GPU: OOB wake ACK=%u intr=%#x GX=%#x gfx=%#x\n",pggx.oob_ack,
++            pgcb_gread(gmu,GEN7_GMU_GMU2HOST_INTR_INFO),pgcb_read(cc,PGPU_GX_GDSCR),
++            pgcb_gread(gmu,GEN7_GMU_GFX_PWR_CLK_STATUS));
++        pgcb_gwrite(gmu,GEN7_GMU_GMU2HOST_INTR_CLR,1u<<31);
++    }
++    if (pggx.oob_ack && !pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR))) {
++        pggx_registers(gpu,gmu);
++        uint32_t init[]={0,pggx_packet(0x17,1),1u<<27,pggx_packet(0x48,7),
++            0x14b|(pgcb_dms_enabled ? 0 : 1u<<11),3,0x20000000,2,pggx.reglist_va,0,1u<<31};
++        pggx.cp_ready=pggx_raw(h,gpu,gmu,smmu,init,11,sequence);
++        if (pggx.cp_ready && pggx_authenticate()) {
++            uint32_t unsecure[]={0,pggx_packet(0x66,1),0};
++            if (pggx_raw(h,gpu,gmu,smmu,unsecure,3,sequence)) {
++                /* Only the GPU receives these values; the host never stores
++                 * either expected value into this observation page. */
++                volatile uint32_t *fence=pggx.fence.cpu;
++                if (fence[0] || fence[1]) panic("PERIDOT GPU fence was not initially zero");
++                uint32_t write[]={0,pggx_packet(0x3d,4),pggx.fence_va,0,0x7350cafe,0xace01340,
++                    pggx_packet(0x26,0)};
++                bool idle=pggx_raw(h,gpu,gmu,smmu,write,7,sequence);
++                __asm__ volatile("dsb sy" ::: "memory");
++                pggx.completed=idle && fence[0]==0x7350cafe && fence[1]==0xace01340;
++                printf("PERIDOT GPU: actual MEM_WRITE completion=%u observed=%#x/%#x\n",
++                    pggx.completed,fence[0],fence[1]);
++            }
++        }
++    }
++    pggx_stop(h,gmu,smmu,cc,rsc,io,sequence);
++    printf("PERIDOT GPU: session finished SQE=%u ZAP=%u memory-write=%u retained-until-reset=1\n",
++        pggx.cp_ready,pggx.zap_ready,pggx.completed);
++    return pggx.completed;
++}
+--- /dev/null
++++ b/bsd/dev/peridot_gen7_board.h
+@@ -0,0 +1,307 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Register definitions and gen7_11_0 tables from LineageOS SM8635 KGSL,
++ * ed4ad0d1ad00b755af2fe61387dcc5397ad20b8f. Original data copyright
++ * The Linux Foundation and Qualcomm Technologies, Inc. and subsidiaries.
++ * Only the gen7_11_0-selected tables are included; no A740 geometry is used. */
++#ifndef PERIDOT_GEN7_BOARD_H
++#define PERIDOT_GEN7_BOARD_H
++#define GEN7_CP_CP2GMU_STATUS 0x812
++#define GEN7_CP_STATUS_1 0x825
++#define GEN7_CP_SQE_INSTR_BASE_LO 0x830
++#define GEN7_CP_SQE_INSTR_BASE_HI 0x831
++#define GEN7_CP_CHICKEN_DBG 0x841
++#define GEN7_CP_DBG_ECO_CNTL 0x843
++#define GEN7_CP_APRIV_CNTL 0x844
++#define GEN7_CP_PROTECT_CNTL 0x84f
++#define GEN7_CP_PROTECT_REG 0x850
++#define GEN7_CP_AHB_CNTL 0x98d
++#define GEN7_CP_BV_APRIV_CNTL 0xad0
++#define GEN7_CP_BV_CHICKEN_DBG 0xada
++#define GEN7_CP_LPAC_PROTECT_CNTL 0xb09
++#define GEN7_RBBM_INT_0_STATUS 0x201
++#define GEN7_RBBM_PERFCTR_GPU_BUSY_MASKED 0x50b
++#define GEN7_RBBM_ISDB_CNT 0x533
++#define GEN7_RBBM_SECVID_TSB_TRUSTED_BASE_LO 0xf800
++#define GEN7_RBBM_SECVID_TSB_TRUSTED_BASE_HI 0xf801
++#define GEN7_RBBM_SECVID_TSB_TRUSTED_SIZE 0xf802
++#define GEN7_RBBM_SECVID_TSB_CNTL 0xf803
++#define GEN7_RBBM_GBIF_CLIENT_QOS_CNTL 0x00011
++#define GEN7_RBBM_INTERFACE_HANG_INT_CNTL 0x0001f
++#define GEN7_RBBM_SP_HYST_CNT 0x00042
++#define GEN7_RBBM_RAC_THRESHOLD_CNT 0x00044
++#define GEN7_RBBM_CLOCK_CNTL 0x000ae
++#define GEN7_RBBM_CLOCK_CNTL_SP0 0x000b0
++#define GEN7_RBBM_CLOCK_CNTL2_SP0 0x000b4
++#define GEN7_RBBM_CLOCK_DELAY_SP0 0x000b8
++#define GEN7_RBBM_CLOCK_HYST_SP0 0x000bc
++#define GEN7_RBBM_CLOCK_CNTL_TP0 0x000c0
++#define GEN7_RBBM_CLOCK_CNTL2_TP0 0x000c4
++#define GEN7_RBBM_CLOCK_CNTL3_TP0 0x000c8
++#define GEN7_RBBM_CLOCK_CNTL4_TP0 0x000cc
++#define GEN7_RBBM_CLOCK_DELAY_TP0 0x000d0
++#define GEN7_RBBM_CLOCK_DELAY2_TP0 0x000d4
++#define GEN7_RBBM_CLOCK_DELAY3_TP0 0x000d8
++#define GEN7_RBBM_CLOCK_DELAY4_TP0 0x000dc
++#define GEN7_RBBM_CLOCK_HYST_TP0 0x000e0
++#define GEN7_RBBM_CLOCK_HYST2_TP0 0x000e4
++#define GEN7_RBBM_CLOCK_HYST3_TP0 0x000e8
++#define GEN7_RBBM_CLOCK_HYST4_TP0 0x000ec
++#define GEN7_RBBM_CLOCK_CNTL_RB0 0x000f0
++#define GEN7_RBBM_CLOCK_CNTL2_RB0 0x000f4
++#define GEN7_RBBM_CLOCK_CNTL_CCU0 0x000f8
++#define GEN7_RBBM_CLOCK_HYST_RB_CCU0 0x00100
++#define GEN7_RBBM_CLOCK_CNTL_RAC 0x00104
++#define GEN7_RBBM_CLOCK_CNTL2_RAC 0x00105
++#define GEN7_RBBM_CLOCK_DELAY_RAC 0x00106
++#define GEN7_RBBM_CLOCK_HYST_RAC 0x00107
++#define GEN7_RBBM_CLOCK_CNTL_TSE_RAS_RBBM 0x00108
++#define GEN7_RBBM_CLOCK_DELAY_TSE_RAS_RBBM 0x00109
++#define GEN7_RBBM_CLOCK_HYST_TSE_RAS_RBBM 0x0010a
++#define GEN7_RBBM_CLOCK_CNTL_UCHE 0x0010b
++#define GEN7_RBBM_CLOCK_CNTL2_UCHE 0x0010c
++#define GEN7_RBBM_CLOCK_DELAY_UCHE 0x0010f
++#define GEN7_RBBM_CLOCK_HYST_UCHE 0x00110
++#define GEN7_RBBM_CLOCK_MODE_VFD 0x00111
++#define GEN7_RBBM_CLOCK_DELAY_VFD 0x00112
++#define GEN7_RBBM_CLOCK_HYST_VFD 0x00113
++#define GEN7_RBBM_CLOCK_MODE_GPC 0x00114
++#define GEN7_RBBM_CLOCK_DELAY_GPC 0x00115
++#define GEN7_RBBM_CLOCK_HYST_GPC 0x00116
++#define GEN7_RBBM_CLOCK_CNTL_GMU_GX 0x00118
++#define GEN7_RBBM_CLOCK_DELAY_GMU_GX 0x00119
++#define GEN7_RBBM_CLOCK_HYST_GMU_GX 0x0011a
++#define GEN7_RBBM_CLOCK_MODE_HLSQ 0x0011b
++#define GEN7_RBBM_CLOCK_DELAY_HLSQ 0x0011c
++#define GEN7_RBBM_CLOCK_HYST_HLSQ 0x0011d
++#define GEN7_RBBM_CLOCK_HYST2_VFD 0x0012f
++#define GEN7_RBBM_CLOCK_MODE_CP 0x00260
++#define GEN7_RBBM_CLOCK_MODE_BV_LRZ 0x00284
++#define GEN7_RBBM_CLOCK_MODE_BV_GRAS 0x00285
++#define GEN7_RBBM_CLOCK_MODE2_GRAS 0x00286
++#define GEN7_RBBM_CLOCK_MODE_BV_VFD 0x00287
++#define GEN7_RBBM_CLOCK_MODE_BV_GPC 0x00288
++#define GEN7_GRAS_NC_MODE_CNTL 0x8602
++#define GEN7_RB_NC_MODE_CNTL 0x8e08
++#define GEN7_RB_CMP_DBG_ECO_CNTL 0x8e28
++#define GEN7_RB_CONTEXT_SWITCH_GMEM_SAVE_RESTORE 0x8e50
++#define GEN7_UCHE_MODE_CNTL 0xe01
++#define GEN7_UCHE_WRITE_THRU_BASE_LO 0xe07
++#define GEN7_UCHE_WRITE_THRU_BASE_HI 0xe08
++#define GEN7_UCHE_TRAP_BASE_LO 0xe09
++#define GEN7_UCHE_TRAP_BASE_HI 0xe0a
++#define GEN7_UCHE_GMEM_RANGE_MIN_LO 0xe0b
++#define GEN7_UCHE_GMEM_RANGE_MIN_HI 0xe0c
++#define GEN7_UCHE_GMEM_RANGE_MAX_LO 0xe0d
++#define GEN7_UCHE_GMEM_RANGE_MAX_HI 0xe0e
++#define GEN7_UCHE_CACHE_WAYS 0xe17
++#define GEN7_UCHE_CLIENT_PF 0xe19
++#define GEN7_UCHE_GBIF_GX_CONFIG 0xe3a
++#define GEN7_UCHE_CMDQ_CONFIG 0xe3c
++#define GEN7_SP_NC_MODE_CNTL 0xae02
++#define GEN7_TPL1_DBG_ECO_CNTL1 0xb602
++#define GEN7_TPL1_NC_MODE_CNTL 0xb604
++#define GEN7_GBIF_QSB_SIDE0 0x3c03
++#define GEN7_GBIF_QSB_SIDE1 0x3c04
++#define GEN7_GBIF_QSB_SIDE2 0x3c05
++#define GEN7_GBIF_QSB_SIDE3 0x3c06
++#define GEN7_GMU_CX_MRC_GBIF_QOS_CTRL 0x1f50b
++#define GEN7_GMU_CM3_SYSRESET 0x1f800
++#define GEN7_GMU_CX_GMU_POWER_COUNTER_ENABLE 0x1f840
++#define GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_0 0x1f841
++#define GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_1 0x1f842
++#define GEN7_GMU_GFX_PWR_CLK_STATUS 0x1f8d0
++#define GEN7_GMU_GMU2HOST_INTR_CLR 0x1f991
++#define GEN7_GMU_GMU2HOST_INTR_INFO 0x1f992
++#define GEN7_GMU_HOST2GMU_INTR_SET 0x1f994
++#define GEN7_GPU_GMU_CX_GMU_CX_FALNEXT_INTF 0x1f8f1
++#define GEN7_GPU_GMU_AO_GPU_CX_BUSY_STATUS 0x23b0c
++#define GEN7_GPU_GMU_AO_GPU_CX_BUSY_MASK 0x23b0e
++#define GEN7_GMU_RSCC_CONTROL_REQ 0x23b07
++static const uint32_t pggx_gbif[][2] = {
++	{ GEN7_GBIF_QSB_SIDE0, 0x00071620 },
++	{ GEN7_GBIF_QSB_SIDE1, 0x00071620 },
++	{ GEN7_GBIF_QSB_SIDE2, 0x00071620 },
++	{ GEN7_GBIF_QSB_SIDE3, 0x00071620 },
++	{ GEN7_RBBM_GBIF_CLIENT_QOS_CNTL, 0x2120212 },
++	{ GEN7_GMU_CX_MRC_GBIF_QOS_CTRL, 0x33 },
++};
++static const uint32_t pggx_hwcg[][2] = {
++	{ GEN7_RBBM_CLOCK_CNTL_SP0, 0x02222222 },
++	{ GEN7_RBBM_CLOCK_CNTL2_SP0, 0x22022222 },
++	{ GEN7_RBBM_CLOCK_HYST_SP0, 0x003cf3cf },
++	{ GEN7_RBBM_CLOCK_DELAY_SP0, 0x00000080 },
++	{ GEN7_RBBM_CLOCK_CNTL_TP0, 0x22222220 },
++	{ GEN7_RBBM_CLOCK_CNTL2_TP0, 0x22222222 },
++	{ GEN7_RBBM_CLOCK_CNTL3_TP0, 0x22222222 },
++	{ GEN7_RBBM_CLOCK_CNTL4_TP0, 0x00222222 },
++	{ GEN7_RBBM_CLOCK_HYST_TP0, 0x77777777 },
++	{ GEN7_RBBM_CLOCK_HYST2_TP0, 0x77777777 },
++	{ GEN7_RBBM_CLOCK_HYST3_TP0, 0x77777777 },
++	{ GEN7_RBBM_CLOCK_HYST4_TP0, 0x00077777 },
++	{ GEN7_RBBM_CLOCK_DELAY_TP0, 0x11111111 },
++	{ GEN7_RBBM_CLOCK_DELAY2_TP0, 0x11111111 },
++	{ GEN7_RBBM_CLOCK_DELAY3_TP0, 0x11111111 },
++	{ GEN7_RBBM_CLOCK_DELAY4_TP0, 0x00011111 },
++	{ GEN7_RBBM_CLOCK_CNTL_UCHE, 0x22222222 },
++	{ GEN7_RBBM_CLOCK_CNTL2_UCHE, 0x00222222 },
++	{ GEN7_RBBM_CLOCK_HYST_UCHE, 0x00000444 },
++	{ GEN7_RBBM_CLOCK_DELAY_UCHE, 0x00000222 },
++	{ GEN7_RBBM_CLOCK_CNTL_RB0, 0x22222222 },
++	{ GEN7_RBBM_CLOCK_CNTL2_RB0, 0x01002222 },
++	{ GEN7_RBBM_CLOCK_CNTL_CCU0, 0x00002220 },
++	{ GEN7_RBBM_CLOCK_HYST_RB_CCU0, 0x44000f00 },
++	{ GEN7_RBBM_CLOCK_CNTL_RAC, 0x25222022 },
++	{ GEN7_RBBM_CLOCK_CNTL2_RAC, 0x00555555 },
++	{ GEN7_RBBM_CLOCK_DELAY_RAC, 0x00000011 },
++	{ GEN7_RBBM_CLOCK_HYST_RAC, 0x00440044 },
++	{ GEN7_RBBM_CLOCK_CNTL_TSE_RAS_RBBM, 0x04222222 },
++	{ GEN7_RBBM_CLOCK_MODE2_GRAS, 0x00000222 },
++	{ GEN7_RBBM_CLOCK_MODE_BV_GRAS, 0x00222222 },
++	{ GEN7_RBBM_CLOCK_MODE_GPC, 0x02222223 },
++	{ GEN7_RBBM_CLOCK_MODE_VFD, 0x00222222 },
++	{ GEN7_RBBM_CLOCK_MODE_BV_GPC, 0x00222222 },
++	{ GEN7_RBBM_CLOCK_MODE_BV_VFD, 0x00002222 },
++	{ GEN7_RBBM_CLOCK_HYST_TSE_RAS_RBBM, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_HYST_GPC, 0x04104004 },
++	{ GEN7_RBBM_CLOCK_HYST_VFD, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_DELAY_TSE_RAS_RBBM, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_DELAY_GPC, 0x00000200 },
++	{ GEN7_RBBM_CLOCK_DELAY_VFD, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_MODE_HLSQ, 0x00002222 },
++	{ GEN7_RBBM_CLOCK_DELAY_HLSQ, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_HYST_HLSQ, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_MODE_BV_LRZ, 0x55555552 },
++	{ GEN7_RBBM_CLOCK_HYST2_VFD, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_MODE_CP, 0x00000222 },
++	{ GEN7_RBBM_CLOCK_CNTL, 0x8aa8aa82 },
++	{ GEN7_RBBM_ISDB_CNT, 0x00000182 },
++	{ GEN7_RBBM_RAC_THRESHOLD_CNT, 0x00000000 },
++	{ GEN7_RBBM_SP_HYST_CNT, 0x00000000 },
++	{ GEN7_RBBM_CLOCK_CNTL_GMU_GX, 0x00000222 },
++	{ GEN7_RBBM_CLOCK_DELAY_GMU_GX, 0x00000111 },
++	{ GEN7_RBBM_CLOCK_HYST_GMU_GX, 0x00000555 },
++};
++static const uint32_t pggx_protect[][2] = {
++    {GEN7_CP_PROTECT_REG + 0,0x13fc0000u},
++    {GEN7_CP_PROTECT_REG + 1,0x0160050bu},
++    {GEN7_CP_PROTECT_REG + 2,0x8000050eu},
++    {GEN7_CP_PROTECT_REG + 3,0x80000510u},
++    {GEN7_CP_PROTECT_REG + 4,0x80000534u},
++    {GEN7_CP_PROTECT_REG + 5,0x027405fbu},
++    {GEN7_CP_PROTECT_REG + 6,0x87a40699u},
++    {GEN7_CP_PROTECT_REG + 7,0x802008a0u},
++    {GEN7_CP_PROTECT_REG + 8,0x809008abu},
++    {GEN7_CP_PROTECT_REG + 9,0x05c008d0u},
++    {GEN7_CP_PROTECT_REG + 10,0x81340900u},
++    {GEN7_CP_PROTECT_REG + 11,0x82c8098du},
++    {GEN7_CP_PROTECT_REG + 12,0x86f80a41u},
++    {GEN7_CP_PROTECT_REG + 13,0x80040df0u},
++    {GEN7_CP_PROTECT_REG + 14,0x80000e01u},
++    {GEN7_CP_PROTECT_REG + 15,0x80200e07u},
++    {GEN7_CP_PROTECT_REG + 16,0x830c3c00u},
++    {GEN7_CP_PROTECT_REG + 17,0x7ffc3cc4u},
++    {GEN7_CP_PROTECT_REG + 18,0x873c8630u},
++    {GEN7_CP_PROTECT_REG + 19,0x80008e00u},
++    {GEN7_CP_PROTECT_REG + 20,0x80008e08u},
++    {GEN7_CP_PROTECT_REG + 21,0x807c8e50u},
++    {GEN7_CP_PROTECT_REG + 22,0x8a008e80u},
++    {GEN7_CP_PROTECT_REG + 23,0x876c9624u},
++    {GEN7_CP_PROTECT_REG + 24,0x80009e40u},
++    {GEN7_CP_PROTECT_REG + 25,0x80349e64u},
++    {GEN7_CP_PROTECT_REG + 26,0x861c9e78u},
++    {GEN7_CP_PROTECT_REG + 27,0x873ca630u},
++    {GEN7_CP_PROTECT_REG + 28,0x8000ae02u},
++    {GEN7_CP_PROTECT_REG + 29,0x803cae50u},
++    {GEN7_CP_PROTECT_REG + 30,0x800cae66u},
++    {GEN7_CP_PROTECT_REG + 31,0x800cae6fu},
++    {GEN7_CP_PROTECT_REG + 32,0x800cb604u},
++    {GEN7_CP_PROTECT_REG + 33,0xbffcec00u},
++    {GEN7_CP_PROTECT_REG + 34,0x7ffcfc00u},
++    {GEN7_CP_PROTECT_REG + 35,0x81298400u},
++    {GEN7_CP_PROTECT_REG + 36,0x04d1844bu},
++    {GEN7_CP_PROTECT_REG + 37,0x801d844cu},
++    {GEN7_CP_PROTECT_REG + 38,0xfffd8580u},
++    {GEN7_CP_PROTECT_REG + 39,0xfffda580u},
++    {GEN7_CP_PROTECT_REG + 40,0xfffdc580u},
++    {GEN7_CP_PROTECT_REG + 41,0x910df400u},
++    {GEN7_CP_PROTECT_REG + 42,0x01edf844u},
++    {GEN7_CP_PROTECT_REG + 43,0x8001f860u},
++    {GEN7_CP_PROTECT_REG + 44,0x808df87fu},
++    {GEN7_CP_PROTECT_REG + 47,0x8001f8c0u},
++};
++static const uint32_t pggx_ifpc_list[] = {
++	GEN7_TPL1_NC_MODE_CNTL,
++	GEN7_SP_NC_MODE_CNTL,
++	GEN7_CP_DBG_ECO_CNTL,
++	GEN7_CP_PROTECT_CNTL,
++	GEN7_CP_LPAC_PROTECT_CNTL,
++	GEN7_CP_PROTECT_REG,
++	GEN7_CP_PROTECT_REG+1,
++	GEN7_CP_PROTECT_REG+2,
++	GEN7_CP_PROTECT_REG+3,
++	GEN7_CP_PROTECT_REG+4,
++	GEN7_CP_PROTECT_REG+5,
++	GEN7_CP_PROTECT_REG+6,
++	GEN7_CP_PROTECT_REG+7,
++	GEN7_CP_PROTECT_REG+8,
++	GEN7_CP_PROTECT_REG+9,
++	GEN7_CP_PROTECT_REG+10,
++	GEN7_CP_PROTECT_REG+11,
++	GEN7_CP_PROTECT_REG+12,
++	GEN7_CP_PROTECT_REG+13,
++	GEN7_CP_PROTECT_REG+14,
++	GEN7_CP_PROTECT_REG+15,
++	GEN7_CP_PROTECT_REG+16,
++	GEN7_CP_PROTECT_REG+17,
++	GEN7_CP_PROTECT_REG+18,
++	GEN7_CP_PROTECT_REG+19,
++	GEN7_CP_PROTECT_REG+20,
++	GEN7_CP_PROTECT_REG+21,
++	GEN7_CP_PROTECT_REG+22,
++	GEN7_CP_PROTECT_REG+23,
++	GEN7_CP_PROTECT_REG+24,
++	GEN7_CP_PROTECT_REG+25,
++	GEN7_CP_PROTECT_REG+26,
++	GEN7_CP_PROTECT_REG+27,
++	GEN7_CP_PROTECT_REG+28,
++	GEN7_CP_PROTECT_REG+29,
++	GEN7_CP_PROTECT_REG+30,
++	GEN7_CP_PROTECT_REG+31,
++	GEN7_CP_PROTECT_REG+32,
++	GEN7_CP_PROTECT_REG+33,
++	GEN7_CP_PROTECT_REG+34,
++	GEN7_CP_PROTECT_REG+35,
++	GEN7_CP_PROTECT_REG+36,
++	GEN7_CP_PROTECT_REG+37,
++	GEN7_CP_PROTECT_REG+38,
++	GEN7_CP_PROTECT_REG+39,
++	GEN7_CP_PROTECT_REG+40,
++	GEN7_CP_PROTECT_REG+41,
++	GEN7_CP_PROTECT_REG+42,
++	GEN7_CP_PROTECT_REG+43,
++	GEN7_CP_PROTECT_REG+44,
++	GEN7_CP_PROTECT_REG+45,
++	GEN7_CP_PROTECT_REG+46,
++	GEN7_CP_PROTECT_REG+47,
++	GEN7_CP_AHB_CNTL,
++};
++static const uint32_t pggx_preempt_list[] = {
++	GEN7_UCHE_TRAP_BASE_LO,
++	GEN7_UCHE_TRAP_BASE_HI,
++	GEN7_UCHE_WRITE_THRU_BASE_LO,
++	GEN7_UCHE_WRITE_THRU_BASE_HI,
++	GEN7_UCHE_GMEM_RANGE_MIN_LO,
++	GEN7_UCHE_GMEM_RANGE_MIN_HI,
++	GEN7_UCHE_GMEM_RANGE_MAX_LO,
++	GEN7_UCHE_GMEM_RANGE_MAX_HI,
++	GEN7_UCHE_CACHE_WAYS,
++	GEN7_UCHE_MODE_CNTL,
++	GEN7_RB_NC_MODE_CNTL,
++	GEN7_RB_CMP_DBG_ECO_CNTL,
++	GEN7_GRAS_NC_MODE_CNTL,
++	GEN7_RB_CONTEXT_SWITCH_GMEM_SAVE_RESTORE,
++	GEN7_UCHE_GBIF_GX_CONFIG,
++	GEN7_UCHE_CLIENT_PF,
++	GEN7_TPL1_DBG_ECO_CNTL1,
++};
++#endif
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -21,7 +21,9 @@
+  * Mode17 cold-boots GMU and verifies a matching HFI response.
+  * Mode18 also sends board power tables and prepares HWSCHED core services.
+  * Mode19 handles START-time real memory allocations and inactive GPU mappings.
+- * Actual GPU submissions and rendering require the following driver phases.
++ * Mode20 owns CB0/SID0, SQE/ZAP/CP bring-up and a real memory-write probe.
++ * It requests slumber/collapse before returning the parent clock lease.
++ * Accelerated iOS rendering still requires its user-space driver integration.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -172,7 +174,7 @@
+     AdrenoFirmwareResult parsed = AdrenoFirmwarePlanGmu(fw, length, regions, 4, blocks, 32, &count);
+     printf("PERIDOT GPU: boot bundle firmware parse=%u records=%lu\n", (unsigned)parsed, (unsigned long)count);
+     if (parsed != AdrenoFirmwareSuccess || count != 15) return;
+-    if (mode == 17 || mode == 18 || mode == 19) { pgpu_coldboot(gmu, smmu, fw, blocks, count); return; }
++    if (mode == 17 || mode == 18 || (mode == 19 || mode == 20)) { pgpu_coldboot(gmu, smmu, fw, blocks, count); return; }
+     IOPhysicalAddress hfi_pa = 0;
+     const vm_size_t allocation = 0x14000;
+     uint32_t *shared = pgpu_allocate(allocation, 0x4000, &hfi_pa);
+@@ -621,7 +623,7 @@
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
+ 	uint32_t bundle = 0;
+ 	PE_parse_boot_argn("peridotgpu", &bundle, sizeof(bundle));
+-	if (bundle == 16 || bundle == 17 || bundle == 18 || bundle == 19) pgpu_boot_bundle(ctx->gmu.base, ctx->smmu.base, bundle);
++	if (bundle == 16 || bundle == 17 || bundle == 18 || (bundle == 19 || bundle == 20)) pgpu_boot_bundle(ctx->gmu.base, ctx->smmu.base, bundle);
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if (mode == 13 || mode == 14 || mode == 15 || mode == 16) {
+@@ -643,7 +645,7 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15 && mode != 16 && mode != 17 && mode != 18 && mode != 19) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14 && mode != 15 && mode != 16 && mode != 17 && mode != 18 && mode != 19 && mode != 20) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -1043,8 +1045,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19) {
+-		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19);
++	if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || (mode == 19 || mode == 20)) {
++		bool diag = (mode == 11 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || (mode == 19 || mode == 20));
+ 		uint32_t reset = 0, manual = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		PE_parse_boot_argn("peridotmanual", &manual, sizeof(manual));
