@@ -30,7 +30,7 @@ Optional peridot GMU/SQE/ZAP files are hash-checked and carried as separate
 reserved segments plus /chosen/memory-map descriptors. Transport alone does
 not upload SQE into GPU memory or authenticate ZAP with the secure firmware.
 """
-import argparse, hashlib, os, struct, sys
+import argparse, hashlib, json, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -128,12 +128,16 @@ def decode(raw, fmt, image_base):
 
 def add_ramdisk_to_adt(adt_blob, phys, size, name="RAMDisk"):
     """Return the ADT with /chosen/memory-map RAMDisk = <phys, size> (two uintptr_t)."""
+    return add_memory_map_property(adt_blob, name, struct.pack('<2Q', phys, size))
+
+
+def add_memory_map_property(adt_blob, name, value):
     root, _ = adt.parse(adt_blob)
     chosen = next(c for c in root.children if c.name == 'chosen')
     mmap = next(c for c in chosen.children if c.name == 'memory-map')
     if mmap.prop(name) is not None:
         raise ValueError('ADT already has memory-map property ' + name)
-    mmap.props.append((name, 0, struct.pack('<2Q', phys, size)))
+    mmap.props.append((name, 0, value))
     return adt.serialize(root)
 
 
@@ -146,7 +150,8 @@ def adt_dram(adt_blob):
 
 
 def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=None,
-          sqe_firmware_path=None, zap_firmware_path=None):
+          sqe_firmware_path=None, zap_firmware_path=None, gles_driver_path=None,
+          gles_manifest_path=None):
     buf = bytearray(open(kernel_path, 'rb').read())
     m = parse_macho(buf)
     nfix = apply_chained_fixups(buf, m)
@@ -201,6 +206,31 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None, gmu_firmware_path=N
         adt_blob = add_ramdisk_to_adt(adt_blob, fw_pa, len(firmware), property_name)
         firmware_info[label] = (hex(fw_pa), len(firmware), expected_sha)
 
+    firmware_info['gles_driver'] = None
+    if bool(gles_driver_path) != bool(gles_manifest_path):
+        raise ValueError('GLES driver and its build manifest are required together')
+    if gles_driver_path:
+        with open(gles_driver_path, 'rb') as image:
+            library = image.read()
+        with open(gles_manifest_path, encoding='utf-8') as record:
+            manifest = json.load(record)
+        digest = hashlib.sha256(library).digest()
+        if not 4096 <= len(library) <= 32 * 1024 * 1024 or \
+                manifest.get('library_sha256') != digest.hex() or \
+                manifest.get('mesa_version') != '25.0.7' or \
+                manifest.get('frontend_commit') != 'd7a74344828c87d37c64f87f237525cb65b7e5f5' or \
+                struct.unpack_from('<4I', library) != (0xfeedfacf, 0x0100000c, 0, 6):
+            raise ValueError('GLES image/manifest differs from the candidate arm64 iOS build')
+        lib_size = (len(library) + PAGE - 1) & ~(PAGE - 1)
+        lib_pa = kernel_end - virt_base + PHYS_BASE
+        if lib_pa < PHYS_BASE or lib_pa + lib_size > PHYS_BASE + MEM_SIZE:
+            raise ValueError('GLES image extends outside kernel-managed RAM')
+        pieces.append((kernel_end, lib_size, library))
+        kernel_end += lib_size
+        adt_blob = add_ramdisk_to_adt(adt_blob, lib_pa, len(library), 'PeridotGLESDriver')
+        adt_blob = add_memory_map_property(adt_blob, 'PeridotGLESDriverSHA256', digest)
+        firmware_info['gles_driver'] = (hex(lib_pa), len(library), digest.hex())
+
     hdr_size = SEG_TABLE + 32 * len(pieces)
     out = bytearray(hdr_size)
     seg_table = []
@@ -234,9 +264,11 @@ if __name__ == '__main__':
     ap.add_argument('--gmu-firmware', help='verified peridot GMU image, carried as reserved payload memory')
     ap.add_argument('--sqe-firmware', help='verified peridot SQE image, reserved transport only')
     ap.add_argument('--zap-firmware', help='verified peridot ZAP image, reserved transport only')
+    ap.add_argument('--gles-driver', help='candidate iOS GLES dylib, reserved transport for explicit peridotgles=1')
+    ap.add_argument('--gles-manifest', help='matching peridot-mesa build.json with the exact library SHA256')
     a = ap.parse_args()
     blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk, a.gmu_firmware,
-                       a.sqe_firmware, a.zap_firmware)
+                       a.sqe_firmware, a.zap_firmware, a.gles_driver, a.gles_manifest)
     open(a.out, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':

@@ -243,6 +243,7 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
 #include "peridot_runtime_memory.c"
 #include "peridot_gpu_boot.c"
 #include "peridot_gpu_runtime.c"
+#include "peridot_gpu_bundle.c"
 static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
 {

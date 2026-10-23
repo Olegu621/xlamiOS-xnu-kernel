@@ -5,6 +5,43 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0142 HARDWARE PASS;0143 compiled; real GLES library built
+
+-0142 CI40010486560/48f2bb6; imageSHA
+ 4ce53da45beb083eb7eaf9a1ac439f7905055738547a96325ba76e06dc73b91e.
+  Actual CP/ZAP/observed MEM_WRITE repeated; native contexts and OOB/clocks
+  retained after the callback. Explicit ACTIVE lease result. No panic;
+  full180s reset/recovery capture, consoleSHA
+ f73024471e5ef5b5acab8a455c23e3cb67c27c9aa2297594d5c2894f0d73c9cb.
+-0143 CI40011784035 SUCCESS/b19d8d7. ImageSHA
+ 2282b9e2520fc8a9e1b8a75e5f164c6e0948a8be37afe4aed45fa355018bf975
+  temporarily running mode21/180s; IOKit registration/device result pending.
+- Mesa/EAGL CI40011468254 SUCCESS/deac84b. Actual iOS arm64 dylib15234848B,
+  SHA621c1deb1bfe19a297686606bcdf825136b36d0a88699c634c39ae33e1571110.
+  All1079 archives/objects and final signed link complete. Local artifact
+  work/mesa-ios0143/peridot-mesa, no phone installation yet. Manifest records
+  real provenance and still correctly says hardware rendering unverified.
+
+### 0144 explicit boot-carried GLES integration implemented (not deployed)
+
+- mkpayload optionally verifies the actual iOS dylib against its pinned
+  Mesa/frontend build manifest and exact SHA, carries it in reserved memory
+  with PeridotGLESDriver and SHA256 properties, and advances kernel_end.
+  Actual3firmware+dylib transport packed on host, kernel_end reservation
+  verified; work/gles-transport0144.payload is private and was not booted.
+- With explicit peridotgles=1 AND genuinely ready engine, pre-launchd VFS
+  creates /usr/lib/peridot-gles-<hash>.dylib using EXCL/NOFOLLOW,0644. Existing
+  files are read/compared, never replaced. Uses normal filesystem I/O/fsync,
+  length/permissions and complete byte readback before enabling any injection.
+- Only backboardd receives the versioned DYLD library path/GL error logging.
+  The standard AMFI dyld-policy query permits those variables only for that
+  process after exact staged-file verification. Other processes retain the
+  previous policy result. Code-directory/page checking is unchanged.
+- Fixed shared-cache hooks remain disabled. No launchd plist/system library
+  replacement or raw filesystem writes. No GPU/UI/rendering success claimed.
+- Kernel patch applies to exact unchanged BSD files from0132 and0142 GPU
+  sources. Compile and real VFS/dyld/BO/renderer behavior remain pending.
+
 ### 0143 IOKit BO/IOSurface frontend implemented;0142 compiled
 
 - CI40010486560 SUCCESS/48f2bb6 compiles persistent mode21 and real kernel

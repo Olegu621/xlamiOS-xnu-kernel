@@ -14,6 +14,8 @@ uint64_t peridot_gpu_map(const uint64_t *pages, uint32_t count);
 int peridot_gpu_unmap(uint64_t address);
 int peridot_gpu_submit(const struct peridot_gpu_ib *, uint32_t count, uint32_t *sequence);
 int peridot_gpu_wait(uint32_t sequence, uint32_t timeout_ms);
+void peridot_gles_stage(void);
+const char *peridot_gles_library(void);
 #ifdef __cplusplus
 }
 #endif
