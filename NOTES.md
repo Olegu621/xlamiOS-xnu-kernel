@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0128 exclusive unrouted context pulse preparation (2026-10-23)
+
+- peridotgpu=14: requires CM3 reset1/fwinit0, exact measured SMMU ID0/ID1,
+  global fault policy enabled/no fault, all24 SMRs invalid, all22 banks M=0.
+  This diagnostic is the only GPU SMMU owner in this boot.
+- Uses pinned context-programming library to enable bank0 with owned native4K
+  tables, read back image/fault status, then disable and bounded ASID sync.
+  Never installs a stream route or releases CM3 reset. No translated client
+  access is possible; faults are synchronously captured by the pulse.
+- Retains both physical allocations on uncertain disable/sync. On success
+  leaves bank0 disabled with initialized configuration (not original undefined
+  reset contents). Clock/power stage subsequently restores its own changes.
+- Application checked; compilation/hardware acceptance pending. Goal remains
+  real GPU command execution followed by iOS acceleration, not this pulse.
+
 ### 0127 hardware PASS (2026-10-23)
 
 - CI39938546016, e6472c4 built successfully; downloaded kernel hash matched.

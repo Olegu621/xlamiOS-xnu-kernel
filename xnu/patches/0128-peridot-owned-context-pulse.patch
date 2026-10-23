@@ -1,0 +1,430 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -34,9 +34,68 @@
+ #include <IOKit/IOLib.h>
+ #include "peridot_smmu4k.c"
+ #include "peridot_smmu4k_context.c"
++#include "peridot_smmu4k_program.c"
++static int pgpu_ctx_barrier(void *cookie)
++{
++    (void)cookie;
++    __asm__ volatile("dsb sy" ::: "memory");
++    return 0;
++}
++static int pgpu_ctx_read32(void *cookie, size_t off, uint32_t *v)
++{
++    if ((off & 3) || off > 0x40000 - 4) return -1;
++    *v = *(volatile uint32_t *)((vm_offset_t)cookie + off);
++    __asm__ volatile("dmb oshld" ::: "memory");
++    return 0;
++}
++static int pgpu_ctx_read64(void *cookie, size_t off, uint64_t *v)
++{
++    if ((off & 7) || off > 0x40000 - 8) return -1;
++    *v = *(volatile uint64_t *)((vm_offset_t)cookie + off);
++    __asm__ volatile("dmb oshld" ::: "memory");
++    return 0;
++}
++static int pgpu_ctx_write32(void *cookie, size_t off, uint32_t v)
++{
++    if ((off & 3) || off > 0x40000 - 4) return -1;
++    __asm__ volatile("dmb oshst" ::: "memory");
++    *(volatile uint32_t *)((vm_offset_t)cookie + off) = v;
++    return pgpu_ctx_barrier(cookie);
++}
++static int pgpu_ctx_write64(void *cookie, size_t off, uint64_t v)
++{
++    if ((off & 7) || off > 0x40000 - 8) return -1;
++    __asm__ volatile("dmb oshst" ::: "memory");
++    *(volatile uint64_t *)((vm_offset_t)cookie + off) = v;
++    return pgpu_ctx_barrier(cookie);
++}
++/* This boot owns the GPU SMMU only when every stream is invalid and every
++ * bank is disabled. No GPU driver or firmware is running on this path. */
++static bool pgpu_ctx_idle(vm_offset_t base)
++{
++    uint32_t id0, id1, cr0, fsr;
++    if (pgpu_ctx_read32((void *)base, 0x20, &id0) ||
++        pgpu_ctx_read32((void *)base, 0x24, &id1) ||
++        pgpu_ctx_read32((void *)base, 0, &cr0) ||
++        pgpu_ctx_read32((void *)base, 0x48, &fsr)) return false;
++    if (id0 != 0x4c017e18 || id1 != 0x40000016 ||
++        (cr0 & 0x40f) != 0x406 || fsr) return false;
++    for (unsigned i = 0; i < (id0 & 255); ++i) {
++        uint32_t smr;
++        if (pgpu_ctx_read32((void *)base, 0x800 + 4*i, &smr) ||
++            (smr & 0x80000000u)) return false;
++    }
++    for (unsigned i = 0; i < (id1 & 255); ++i) {
++        uint32_t ctl;
++        if (pgpu_ctx_read32((void *)base, 0x20000 + 4096*i, &ctl) ||
++            (ctl & 1)) return false;
++    }
++    return true;
++}
+ static void
+-pgpu_prepare_tables(uint32_t id0, uint32_t id2)
+-{
++pgpu_prepare_tables(uint32_t id0, uint32_t id2, vm_offset_t smmu)
++{
++    bool retain = false;
+     IOPhysicalAddress pool_pa = 0, data_pa = 0;
+     const vm_size_t bytes = 0x4000;
+     uint64_t *pool = IOMallocContiguous(bytes, bytes, &pool_pa);
+@@ -83,6 +142,30 @@
+             flush_dcache64((addr64_t)pool_pa, bytes, TRUE);
+             __asm__ volatile("dsb sy" ::: "memory");
+         }
++        if (encoded == ArmSmmu4KSuccess && smmu) {
++            if (!pgpu_ctx_idle(smmu)) {
++                printf("PERIDOT GPU: context pulse refused: SMMU not exclusively idle\n");
++            } else {
++                ArmSmmu4KIo io = {(void *)smmu, 0x40000,
++                    pgpu_ctx_read32, pgpu_ctx_read64,
++                    pgpu_ctx_write32, pgpu_ctx_write64, pgpu_ctx_barrier};
++                ArmSmmu4KProgramResult programmed, stopped;
++                ArmSmmu4KStatus active = ArmSmmu4KProgramDisabledContext(
++                    &io, 0, &cfg, 10000, &programmed);
++                retain = programmed.must_retain_tables != 0;
++                printf("PERIDOT GPU: context pulse program=%u phase=%u enabled=%u readback=%u fault=%#x writes=%u\n",
++                    (unsigned)active, programmed.phase, programmed.enabled,
++                    programmed.readback_valid, programmed.fault_status, programmed.writes);
++                if (active == ArmSmmu4KSuccess) {
++                    ArmSmmu4KStatus off = ArmSmmu4KDisableOwnedContext(
++                        &io, 0, &cfg, 10000, &stopped);
++                    retain = stopped.must_retain_tables != 0;
++                    printf("PERIDOT GPU: context pulse disable=%u verified=%u sync=%u retain=%u; no SID routes\n",
++                        (unsigned)off, stopped.disabled_verified,
++                        stopped.tlb_synchronized, retain);
++                }
++            }
++        }
+         printf("PERIDOT GPU: native4K context encode=%u published=%u CBAR=%#x CBA2R=%#x TCR=%#x TCR2=%#x SCTLR=%#x; inactive\n",
+             (unsigned)encoded, encoded == ArmSmmu4KSuccess,
+             image.cbar, image.cba2r, image.tcr, image.tcr2, image.sctlr);
+@@ -92,8 +175,8 @@
+         (unsigned long)result.leaf_pages);
+ out:
+     /* No device ever receives these addresses, so both allocations can retire. */
+-    if (data) IOFreeContiguous(data, bytes);
+-    if (pool) IOFreeContiguous(pool, bytes);
++    if (data && !retain) IOFreeContiguous(data, bytes);
++    if (pool && !retain) IOFreeContiguous(pool, bytes);
+ }
+ 
+ static uint32_t
+@@ -412,7 +495,14 @@
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if (mode == 13) pgpu_prepare_tables(ctx->smmu.inv->id[0], ctx->smmu.inv->id[2]);
++	if (mode == 13 || mode == 14) {
++		if (mode == 14 && (ctx->gmu.inv->sysreset != 1 || ctx->gmu.inv->fw_init != 0)) {
++			printf("PERIDOT GPU: context pulse refused: CM3 not reset\n");
++			return;
++		}
++		pgpu_prepare_tables(ctx->smmu.inv->id[0], ctx->smmu.inv->id[2],
++		    mode == 14 ? ctx->smmu.base : 0);
++	}
+ }
+ 
+ 
+@@ -424,11 +514,11 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12 && mode != 13) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13 && mode != 14) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+-	if (mode == 12) { pgpu_prepare_tables(0, 0); return; }
++	if (mode == 12) { pgpu_prepare_tables(0, 0, 0); return; }
+ 	printf("PERIDOT GPU: read-only clock handoff; DT expects Adreno735 id=0x43030b00 gen7-11-0\n");
+ 	vm_offset_t gcc = ml_io_map(0x100000, 0x80000);
+ 	if (!gcc) {
+@@ -824,8 +914,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11 || mode == 13) {
+-		bool diag = (mode == 11 || mode == 13);
++	if (mode == 10 || mode == 11 || mode == 13 || mode == 14) {
++		bool diag = (mode == 11 || mode == 13 || mode == 14);
+ 		uint32_t reset = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		if (reset < 30 || reset > 3600) {
+--- /dev/null
++++ b/bsd/dev/ArmSmmu4KProgram.h
+@@ -0,0 +1,73 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef ARM_SMMU_4K_PROGRAM_H
++#define ARM_SMMU_4K_PROGRAM_H
++#include "ArmSmmu4KContext.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++/* Byte offsets are relative to one real, owned SMMUv2 MMIO mapping. All I/O
++ * callbacks return 0 on success. read/write64 must perform actual aligned
++ * 64-bit TTBR accesses; barrier orders table visibility and device writes.
++ * A barrier is NOT cache cleaning. No callback may silently fake success. */
++typedef struct {
++    void *cookie;
++    size_t register_bytes;
++    int (*read32)(void *,size_t,uint32_t *);
++    int (*read64)(void *,size_t,uint64_t *);
++    int (*write32)(void *,size_t,uint32_t);
++    int (*write64)(void *,size_t,uint64_t);
++    int (*barrier)(void *);
++} ArmSmmu4KIo;
++typedef struct {
++    uint64_t context_offset;
++    uint32_t id0,id1,id2,phase,writes,poll_reads,fault_status;
++    uint32_t readback_valid,enabled,disabled_verified,tlb_synchronized,must_retain_tables;
++    ArmSmmu4KContextImage readback;
++} ArmSmmu4KProgramResult;
++
++/* REAL register programming primitive, not a device-discovery/ownership layer.
++ * Caller MUST hold an exclusive bank/ASID/stream lease, keep the device powered
++ * and clocked, quiesce/fault its streams, install its fault interrupt handler,
++ * establish platform ACTLR/security requirements, and clean/publish real owned
++ * native4K tables before calling. Every argument/result must be disjoint.
++ * Reads actual ID0/ID1/ID2 through I/O and overrides config's supplied IDs.
++ * Refuses enabled banks before any write. Enables SCTLR only after register
++ * readback and bounded ASID invalidation/synchronization. No global reset,
++ * stream reassignment or other bank is touched. On failure attempts disable
++ * and sync; must_retain_tables stays set unless both are confirmed. Success
++ * also retains table ownership while the installed context is active.
++ * This does not walk tables or establish actual GPU execution/correctness. */
++ArmSmmu4KStatus ArmSmmu4KProgramDisabledContext(const ArmSmmu4KIo *,unsigned bank,
++    const ArmSmmu4KContextConfig *,unsigned poll_budget,ArmSmmu4KProgramResult *);
++/* Read-only observation of actual IDs and all owned context registers. Requires
++ * exact enabled native4K image and no pending context fault. Does not walk the
++ * physical tables or establish ownership. Readback is a momentary observation;
++ * callers retain resources, quiescence/exclusive lease and fault handling. */
++ArmSmmu4KStatus ArmSmmu4KObserveOwnedContext(const ArmSmmu4KIo *,unsigned bank,
++    const ArmSmmu4KContextConfig *,ArmSmmu4KProgramResult *);
++/* Publish already cleaned descriptor changes with a real ASID invalidation
++ * and bounded context TLBSYNC. Observe the complete enabled native4K image and
++ * faults before and after. Caller exclusively owns this bank/ASID, serializes
++ * all page-table updates and keeps every master quiesced. A barrier is not a
++ * cache clean. No SCTLR/TTBR/stream writes or recovery/reset are performed.
++ * Any failure retains all mappings/resources; success is not a GPU fence. */
++ArmSmmu4KStatus ArmSmmu4KSynchronizeOwnedContext(const ArmSmmu4KIo *,unsigned bank,
++    const ArmSmmu4KContextConfig *,unsigned poll_budget,ArmSmmu4KProgramResult *);
++/* TLBIASID (or, with all set, TLBIALL) and the bounded TLBSYNC of the context bank at context_offset alone: no image or fault
++ * observation. For a caller that observed this owned bank's image at that offset already and keeps it owned (the live updater
++ * between its whole-verification updates). */
++ArmSmmu4KStatus ArmSmmu4KSyncContextTlb(const ArmSmmu4KIo *,uint64_t context_offset,unsigned asid,unsigned all,
++    unsigned poll_budget,ArmSmmu4KProgramResult *);
++/* As ArmSmmu4KSynchronizeOwnedContext, but with TLBIALL for the bank instead of TLBIASID: every cached translation of the bank goes,
++ * whatever ASID it was tagged with. */
++ArmSmmu4KStatus ArmSmmu4KInvalidateAllOwnedContext(const ArmSmmu4KIo *,unsigned bank,
++    const ArmSmmu4KContextConfig *,unsigned poll_budget,ArmSmmu4KProgramResult *);
++/* Disable only if actual stage/format/roots/ASID/attributes still match the
++ * expected owned context. Retain bank, mappings and tables on any uncertainty.
++ * Does not release the caller's lease or power/stream/interrupt resources. */
++ArmSmmu4KStatus ArmSmmu4KDisableOwnedContext(const ArmSmmu4KIo *,unsigned bank,
++    const ArmSmmu4KContextConfig *,unsigned poll_budget,ArmSmmu4KProgramResult *);
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- /dev/null
++++ b/bsd/dev/peridot_smmu4k_program.c
+@@ -0,0 +1,195 @@
++/* SPDX-License-Identifier: MIT */
++#include "ArmSmmu4KProgram.h"
++#define FSR_FAULT UINT32_C(0xc00001fe)
++static int read_image(const ArmSmmu4KIo *io,size_t gr1,size_t cb,unsigned bank,
++    ArmSmmu4KContextImage *v)
++{
++    v->reserved_zero=0;
++    return io->read32(io->cookie,gr1+bank*4,&v->cbar) ||
++        io->read32(io->cookie,gr1+0x800+bank*4,&v->cba2r) ||
++        io->read32(io->cookie,cb+0x30,&v->tcr) ||
++        io->read32(io->cookie,cb+0x10,&v->tcr2) ||
++        io->read64(io->cookie,cb+0x20,&v->ttbr0) ||
++        io->read64(io->cookie,cb+0x28,&v->ttbr1) ||
++        io->read32(io->cookie,cb+0x38,&v->mair0) ||
++        io->read32(io->cookie,cb+0x3c,&v->mair1) ||
++        io->read32(io->cookie,cb,&v->sctlr);
++}
++static int write32(const ArmSmmu4KIo *io,size_t at,uint32_t value,ArmSmmu4KProgramResult *r)
++{
++    ++r->writes;return io->write32(io->cookie,at,value);
++}
++static int write64(const ArmSmmu4KIo *io,size_t at,uint64_t value,ArmSmmu4KProgramResult *r)
++{
++    ++r->writes;return io->write64(io->cookie,at,value);
++}
++/* TLBIASID (+0x610, value = ASID) or, with all set, TLBIALL (+0x618, value ignored), then TLBSYNC/TLBSTATUS. */
++static ArmSmmu4KStatus sync_tlb(const ArmSmmu4KIo *io,size_t cb,unsigned asid,unsigned all,
++    unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    r->tlb_synchronized=0;
++    if(io->barrier(io->cookie) || write32(io,cb+(all?0x618:0x610),all?0:asid,r) ||
++        write32(io,cb+0x7f0,UINT32_MAX,r) || io->barrier(io->cookie))return ArmSmmu4KIoError;
++    for(unsigned i=0;i<budget;++i) {
++        uint32_t status;++r->poll_reads;
++        if(io->read32(io->cookie,cb+0x7f4,&status))return ArmSmmu4KIoError;
++        if(!(status&1)) {
++            /* Order the completed device observation before callers recycle
++             * normal-memory tables or publish subsequent context work. */
++            if(io->barrier(io->cookie))return ArmSmmu4KIoError;
++            r->tlb_synchronized=1;return ArmSmmu4KSuccess;
++        }
++    }
++    return ArmSmmu4KTimeout;
++}
++static ArmSmmu4KStatus sync_asid(const ArmSmmu4KIo *io,size_t cb,unsigned asid,
++    unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    return sync_tlb(io,cb,asid,0,budget,r);
++}
++static ArmSmmu4KStatus disable_sync(const ArmSmmu4KIo *io,size_t cb,unsigned asid,
++    unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    r->must_retain_tables=1;r->disabled_verified=0;
++    uint32_t value;
++    if(write32(io,cb,0,r) || io->barrier(io->cookie) || io->read32(io->cookie,cb,&value))return ArmSmmu4KIoError;
++    if(value)return ArmSmmu4KStateMismatch;
++    r->disabled_verified=1;r->enabled=0;
++    ArmSmmu4KStatus status=sync_asid(io,cb,asid,budget,r);
++    if(status==ArmSmmu4KSuccess)r->must_retain_tables=0;
++    return status;
++}
++static ArmSmmu4KStatus prepare(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned budget,ArmSmmu4KProgramResult *r,
++    ArmSmmu4KContextConfig *actual,ArmSmmu4KContextImage *image,size_t *gr1)
++{
++    if(!r)return ArmSmmu4KArgument;
++    *r=(ArmSmmu4KProgramResult){0};
++    r->must_retain_tables=1;
++    if(!io || !config || !io->read32 || !io->read64 || !io->write32 || !io->write64 ||
++        !io->barrier || io->register_bytes<0x2c || !budget || budget>1048576 || bank>255)return ArmSmmu4KArgument;
++    r->phase=1;
++    if(io->read32(io->cookie,0x20,&r->id0) || io->read32(io->cookie,0x24,&r->id1) ||
++        io->read32(io->cookie,0x28,&r->id2))return ArmSmmu4KIoError;
++    unsigned shift=(r->id1>>31)?16:12;
++    size_t pages=(size_t)1<<(((r->id1>>28)&7)+1);
++    size_t stride=(size_t)1<<shift;
++    unsigned banks=r->id1&255,s2=(r->id1>>16)&255;
++    if(!banks || banks>pages || s2>banks || bank<s2 || bank>=banks ||
++        io->register_bytes<2*pages*stride)return ArmSmmu4KUnsupported;
++    *gr1=stride;r->context_offset=(pages+bank)*stride;
++    if(r->context_offset>io->register_bytes || io->register_bytes-r->context_offset<0x7f8 ||
++        *gr1+0x804+bank*4>io->register_bytes)return ArmSmmu4KBadRange;
++    *actual=*config;actual->id0=r->id0;actual->id2=r->id2;
++    return ArmSmmu4KEncodeContext(actual,image);
++}
++ArmSmmu4KStatus ArmSmmu4KProgramDisabledContext(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    ArmSmmu4KContextConfig actual;ArmSmmu4KContextImage image;size_t gr1;
++    ArmSmmu4KStatus status=prepare(io,bank,config,budget,r,&actual,&image,&gr1);
++    if(status!=ArmSmmu4KSuccess)return status;
++    size_t cb=(size_t)r->context_offset;uint32_t sctlr;
++    if(io->read32(io->cookie,cb,&sctlr))return ArmSmmu4KIoError;
++    if(sctlr&1){r->enabled=1;return ArmSmmu4KBusy;}
++    r->must_retain_tables=1;r->phase=2;
++    /* A disabled owned bank only. TCR2/TCR precede all TTBR accesses. */
++    if(write32(io,cb,0,r) || io->barrier(io->cookie) ||
++        write32(io,gr1+0x800+bank*4,image.cba2r,r) || write32(io,gr1+bank*4,image.cbar,r) ||
++        write32(io,cb+0x10,image.tcr2,r) || write32(io,cb+0x30,image.tcr,r) ||
++        write64(io,cb+0x20,image.ttbr0,r) || write64(io,cb+0x28,image.ttbr1,r) ||
++        write32(io,cb+0x38,image.mair0,r) || write32(io,cb+0x3c,image.mair1,r) ||
++        write32(io,cb+0x58,UINT32_MAX,r)) {status=ArmSmmu4KIoError;goto failed;}
++    status=sync_asid(io,cb,actual.asid,budget,r);if(status!=ArmSmmu4KSuccess)goto failed;
++    r->phase=3;
++    if(read_image(io,gr1,cb,bank,&r->readback)) {status=ArmSmmu4KIoError;goto failed;}
++    r->readback_valid=1;
++    /* Verify configuration while M is still zero; never enable a bad granule. */
++    sctlr=r->readback.sctlr;r->readback.sctlr=image.sctlr;
++    status=ArmSmmu4KValidateContextReadback(&actual,&r->readback);r->readback.sctlr=sctlr;
++    if(status!=ArmSmmu4KSuccess || sctlr) {status=ArmSmmu4KStateMismatch;goto failed;}
++    r->readback_valid=0;
++    if(io->barrier(io->cookie) || write32(io,cb,image.sctlr,r) || io->barrier(io->cookie)) {status=ArmSmmu4KIoError;goto failed;}
++    r->phase=4;
++    if(read_image(io,gr1,cb,bank,&r->readback)) {status=ArmSmmu4KIoError;goto failed;}
++    r->readback_valid=1;r->enabled=r->readback.sctlr&1;
++    if(io->read32(io->cookie,cb+0x58,&r->fault_status)) {status=ArmSmmu4KIoError;goto failed;}
++    status=ArmSmmu4KValidateContextReadback(&actual,&r->readback);if(status!=ArmSmmu4KSuccess)goto failed;
++    if(r->fault_status&FSR_FAULT) {status=ArmSmmu4KFault;goto failed;}
++    r->phase=5;r->enabled=1;return ArmSmmu4KSuccess;
++failed:
++    /* Even a reported failed write may have reached hardware. On uncertainty
++     * retain all tables/leases; never claim safe recycling after timeout. */
++    r->readback_valid=0;(void)disable_sync(io,cb,actual.asid,budget,r);
++    r->phase=6;return status;
++}
++ArmSmmu4KStatus ArmSmmu4KDisableOwnedContext(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    ArmSmmu4KContextConfig actual;ArmSmmu4KContextImage image;size_t gr1;
++    ArmSmmu4KStatus status=prepare(io,bank,config,budget,r,&actual,&image,&gr1);
++    if(status!=ArmSmmu4KSuccess)return status;
++    size_t cb=(size_t)r->context_offset;r->must_retain_tables=1;
++    if(read_image(io,gr1,cb,bank,&r->readback))return ArmSmmu4KIoError;
++    r->readback_valid=1;uint32_t sctlr=r->readback.sctlr;
++    /* An enabled bank must match the owned image (ValidateContextReadback, with its documented read-only bits); a
++     * disabled one is compared with SCTLR substituted. */
++    if(sctlr)status=ArmSmmu4KValidateContextReadback(&actual,&r->readback);
++    else {r->readback.sctlr=image.sctlr;status=ArmSmmu4KValidateContextReadback(&actual,&r->readback);r->readback.sctlr=sctlr;}
++    if(status!=ArmSmmu4KSuccess)return status; /* Another context: do not touch. */
++    r->readback_valid=0;status=disable_sync(io,cb,actual.asid,budget,r);r->phase=status==ArmSmmu4KSuccess?7:6;
++    return status;
++}
++
++ArmSmmu4KStatus ArmSmmu4KObserveOwnedContext(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,ArmSmmu4KProgramResult *r)
++{
++    ArmSmmu4KContextConfig actual;ArmSmmu4KContextImage image;size_t gr1;
++    ArmSmmu4KStatus status=prepare(io,bank,config,1,r,&actual,&image,&gr1);
++    if(status!=ArmSmmu4KSuccess)return status;
++    if(read_image(io,gr1,(size_t)r->context_offset,bank,&r->readback))return ArmSmmu4KIoError;
++    r->readback_valid=1;r->enabled=r->readback.sctlr&1;
++    status=ArmSmmu4KValidateContextReadback(&actual,&r->readback);
++    if(status!=ArmSmmu4KSuccess)return status;
++    if(io->read32(io->cookie,(size_t)r->context_offset+0x58,&r->fault_status) || io->barrier(io->cookie))return ArmSmmu4KIoError;
++    if(r->fault_status&FSR_FAULT)return ArmSmmu4KFault;
++    r->phase=8;return ArmSmmu4KSuccess;
++}
++
++static ArmSmmu4KStatus synchronize(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned all,unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    if(!r)return ArmSmmu4KArgument;
++    *r=(ArmSmmu4KProgramResult){0};r->must_retain_tables=1;
++    if(!budget || budget>1048576)return ArmSmmu4KArgument;
++    ArmSmmu4KStatus status=ArmSmmu4KObserveOwnedContext(io,bank,config,r);
++    if(status!=ArmSmmu4KSuccess)return status;
++    status=sync_tlb(io,(size_t)r->context_offset,config->asid,all,budget,r);
++    if(status!=ArmSmmu4KSuccess)return status;
++    ArmSmmu4KProgramResult after;
++    status=ArmSmmu4KObserveOwnedContext(io,bank,config,&after);
++    r->readback=after.readback;r->readback_valid=after.readback_valid;
++    r->fault_status=after.fault_status;r->enabled=after.enabled;
++    if(status!=ArmSmmu4KSuccess)return status;
++    if(r->id0!=after.id0 || r->id1!=after.id1 || r->id2!=after.id2 ||
++        r->context_offset!=after.context_offset)return ArmSmmu4KStateMismatch;
++    r->phase=9;return ArmSmmu4KSuccess;
++}
++ArmSmmu4KStatus ArmSmmu4KSyncContextTlb(const ArmSmmu4KIo *io,uint64_t context_offset,unsigned asid,unsigned all,
++    unsigned budget,ArmSmmu4KProgramResult *r)
++{
++    if(!r)return ArmSmmu4KArgument;
++    *r=(ArmSmmu4KProgramResult){0};r->must_retain_tables=1;
++    if(!io || !io->write32 || !io->read32 || !io->barrier || !budget || budget>1048576 || !context_offset ||
++        context_offset>io->register_bytes || io->register_bytes-context_offset<0x7f8)return ArmSmmu4KArgument;
++    r->context_offset=context_offset;
++    ArmSmmu4KStatus status=sync_tlb(io,(size_t)context_offset,asid,all,budget,r);
++    if(status==ArmSmmu4KSuccess)r->phase=9;
++    return status;
++}
++ArmSmmu4KStatus ArmSmmu4KSynchronizeOwnedContext(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned budget,ArmSmmu4KProgramResult *r)
++{return synchronize(io,bank,config,0,budget,r);}
++ArmSmmu4KStatus ArmSmmu4KInvalidateAllOwnedContext(const ArmSmmu4KIo *io,unsigned bank,
++    const ArmSmmu4KContextConfig *config,unsigned budget,ArmSmmu4KProgramResult *r)
++{return synchronize(io,bank,config,1,budget,r);}
