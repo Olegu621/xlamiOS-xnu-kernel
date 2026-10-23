@@ -1,0 +1,273 @@
+--- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 03:25:20.883822348 +0300
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 03:25:20.884822344 +0300
+@@ -109,7 +109,10 @@
+ 	PGPU_CLOCK_OFF_TIMEOUT,
+ 	PGPU_CLOCK_OWNERSHIP_LOST,
+ 	PGPU_CLOCK_HUB_UPDATE_TIMEOUT,
+-	PGPU_CLOCK_HUB_RESTORE_TIMEOUT
++	PGPU_CLOCK_HUB_RESTORE_TIMEOUT,
++	PGPU_CLOCK_BRANCH_RESTORE_TIMEOUT,
++	PGPU_CLOCK_BRANCH_NONE_LATCHED,
++	PGPU_CLOCK_BRANCH_PARTIAL_LATCH
+ };
+ 
+ static inline bool
+@@ -362,4 +365,175 @@
+ 	}
+ 	return PGPU_CLOCK_PASS;
+ }
++
++/* Mode5 stage. Re-establishes the vendor probe invariant -- the always-on
++ * pair cxo-aon (0x9004) and demet (0x900c), which gpu_cc_cliffs_probe
++ * force-enables -- and only then repeats the configuration AHB gate test
++ * plus one HALT-class sibling (cx-ff 0x90f8). The AHB enable never latched
++ * in 0115 or 0116 even after the hub RCG was programmed, while boot-loader
++ * writes such as demet did latch, so this separates "cbcr writes never
++ * latch" from "this branch refuses". Branch registers are read-modify-
++ * written: every bit except the enable latch is preserved, singles are
++ * restored immediately, the pair is restored last. Refuse unreadable
++ * registers and live/unknown domains before any write; leave for the
++ * diagnostic reset when a restore does not verify. No GMU, GPU core or
++ * SMMU access, no RCG writes, votes or firmware in this stage.
++ */
++#define PGPU_BRANCH_ON 1u
++#define PGPU_BRANCH_CXO_AON 0x9004u
++#define PGPU_BRANCH_DEMET 0x900cu
++#define PGPU_BRANCH_CX_FF 0x90f8u
++
++struct pgpu_branch_probe {
++	unsigned off;
++	uint32_t before;
++	uint32_t during;
++	uint32_t after;
++	bool accepted;
++	bool already_on;
++	bool restored;
++};
++
++/* Same bounded poll as the AHB gate, 10ms, for any cbcr latch. */
++static inline bool
++pgpu_branch_latch_settled(const struct pgpu_power_io *io, unsigned off,
++    bool on)
++{
++	for (unsigned i = 0; i < 100; ++i) {
++		io->delay_us(100);
++		uint32_t value = io->read(io->context, off);
++		if (value == UINT32_MAX) {
++			return false;
++		}
++		if (((value & PGPU_BRANCH_ON) != 0) == on) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/* probes[0..pair_count-1] are the always-on pair: enabled after the CX
++ * power-on and restored after every single. probes[pair_count..count-1]
++ * are toggled one at a time and restored immediately. observe, when
++ * non-NULL, runs after CX power-on, after the pair, and after the singles. */
++static inline enum pgpu_clock_result
++pgpu_cx_hold_branch_matrix(const struct pgpu_power_io *io,
++    struct pgpu_branch_probe *probes, unsigned count, unsigned pair_count,
++    uint32_t *cx_final, uint32_t *gx_final,
++    void *observe_ctx, void (*observe)(void *observe_ctx))
++{
++	if (count == 0 || pair_count > count) {
++		return PGPU_CLOCK_REFUSED;
++	}
++	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
++	uint32_t hw = io->read(io->context, PGPU_CX_HW);
++	uint32_t gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (!pgpu_collapsed(cx) || !pgpu_collapsed(gx) ||
++	    hw == UINT32_MAX || (hw & PGPU_ON)) {
++		return PGPU_CLOCK_REFUSED;
++	}
++	for (unsigned i = 0; i < count; ++i) {
++		uint32_t value = io->read(io->context, probes[i].off);
++		if (value == UINT32_MAX) {
++			return PGPU_CLOCK_REFUSED;
++		}
++		probes[i].before = value;
++		probes[i].during = value;
++		probes[i].after = value;
++		probes[i].already_on = (value & PGPU_BRANCH_ON) != 0;
++		probes[i].accepted = probes[i].already_on;
++		probes[i].restored = true;
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx & ~PGPU_COLLAPSE);
++	bool powered = pgpu_power_wait(io, true);
++	cx = io->read(io->context, PGPU_CX_GDSCR);
++	gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (cx == UINT32_MAX || (cx & (PGPU_HW_CONTROL | PGPU_OVERRIDE)) ||
++	    !pgpu_collapsed(gx)) {
++		return PGPU_CLOCK_OWNERSHIP_LOST;
++	}
++	if (powered) {
++		if (observe) {
++			observe(observe_ctx);
++		}
++		for (unsigned i = 0; i < pair_count; ++i) {
++			struct pgpu_branch_probe *p = &probes[i];
++			if (p->already_on) {
++				continue;
++			}
++			io->write(io->context, p->off, p->before | PGPU_BRANCH_ON);
++			(void)pgpu_branch_latch_settled(io, p->off, true);
++			p->during = io->read(io->context, p->off);
++			p->accepted = (p->during & PGPU_BRANCH_ON) != 0;
++		}
++		if (observe) {
++			observe(observe_ctx);
++		}
++		for (unsigned i = pair_count; i < count; ++i) {
++			struct pgpu_branch_probe *p = &probes[i];
++			if (p->already_on) {
++				continue;
++			}
++			io->write(io->context, p->off, p->before | PGPU_BRANCH_ON);
++			(void)pgpu_branch_latch_settled(io, p->off, true);
++			p->during = io->read(io->context, p->off);
++			p->accepted = (p->during & PGPU_BRANCH_ON) != 0;
++			io->write(io->context, p->off, p->before);
++			p->restored = pgpu_branch_latch_settled(io, p->off,
++			    (p->before & PGPU_BRANCH_ON) != 0);
++			p->after = io->read(io->context, p->off);
++			if (!p->restored) {
++				return PGPU_CLOCK_BRANCH_RESTORE_TIMEOUT;
++			}
++		}
++		if (observe) {
++			observe(observe_ctx);
++		}
++		for (unsigned i = pair_count; i > 0; --i) {
++			struct pgpu_branch_probe *p = &probes[i - 1];
++			if (p->already_on) {
++				continue;
++			}
++			io->write(io->context, p->off, p->before);
++			if (!pgpu_branch_latch_settled(io, p->off,
++			    (p->before & PGPU_BRANCH_ON) != 0)) {
++				return PGPU_CLOCK_BRANCH_RESTORE_TIMEOUT;
++			}
++			p->after = io->read(io->context, p->off);
++			p->restored = true;
++		}
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx | PGPU_COLLAPSE);
++	if (!pgpu_power_wait(io, false) ||
++	    !pgpu_collapsed(io->read(io->context, PGPU_CX_GDSCR))) {
++		return PGPU_CLOCK_OFF_TIMEOUT;
++	}
++	if (cx_final) {
++		*cx_final = io->read(io->context, PGPU_CX_GDSCR);
++	}
++	if (gx_final) {
++		*gx_final = io->read(io->context, PGPU_GX_GDSCR);
++	}
++	if (!powered) {
++		return PGPU_CLOCK_ON_TIMEOUT;
++	}
++	unsigned accepted = 0;
++	unsigned fresh = 0;
++	for (unsigned i = 0; i < count; ++i) {
++		if (probes[i].already_on) {
++			continue;
++		}
++		fresh++;
++		if (probes[i].accepted) {
++			accepted++;
++		}
++	}
++	if (fresh != 0 && accepted == 0) {
++		return PGPU_CLOCK_BRANCH_NONE_LATCHED;
++	}
++	if (accepted != fresh) {
++		return PGPU_CLOCK_BRANCH_PARTIAL_LATCH;
++	}
++	return PGPU_CLOCK_PASS;
++}
+ #endif
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 03:25:20.883822348 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 03:25:20.885822340 +0300
+@@ -2,10 +2,11 @@
+  * gcc-cliffs.c/gpucc-cliffs.c; power-domain offsets from the live DT reg
+  * properties (some node unit addresses do NOT equal their reg addresses).
+  * peridotgpu=1 reads handoff only. Mode2 also pulses an idle CX domain,
+- * mode3 holds it while testing the configuration AHB gate (0x90c8), and
+- * mode4 also programs the hub RCG that feeds that gate; a diagnostic reset
+- * timer is required for all three. No firmware/GPU/GMU/SMMU or core
+- * register access, no other gate or RCG writes.
++ * mode3 holds it while testing the configuration AHB gate (0x90c8), mode4
++ * also programs the hub RCG that feeds that gate, and mode5 restores the
++ * vendor always-on pair (cxo-aon/demet) before retrying the gate and one
++ * HALT-class sibling; a diagnostic reset timer is required for all of
++ * them. No firmware/GPU/GMU/SMMU or core register access.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -70,7 +71,8 @@
+ 	static bool attempted;
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+-	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4) || attempted) {
++	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5) ||
++	    attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -195,5 +197,54 @@
+ 		    names[result], cx_out, pgpu_read(cc, PGPU_CX_HW), gx_out,
+ 		    ahb_out, hub_cfg_out, hub_cmd_out);
+ 	}
++	if (mode == 5) {
++		uint32_t reset = 0;
++		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
++		if (reset < 30 || reset > 3600) {
++			printf("PERIDOT GPU: branch matrix refused: diagnostic reset timer required\n");
++			return;
++		}
++		printf("PERIDOT GPU: CX hold + branch matrix: aon pair first, bounded10ms per test; gpll0 mode/opmode/state/status=%#x/%#x/%#x/%#x\n",
++		    pgpu_read(gcc, 0x0), pgpu_read(gcc, 0x4), pgpu_read(gcc, 0x8),
++		    pgpu_read(gcc, 0xc));
++		struct pgpu_branch_probe probes[] = {
++			{ .off = PGPU_BRANCH_CXO_AON },
++			{ .off = PGPU_BRANCH_DEMET },
++			{ .off = PGPU_AHB_CBCR },
++			{ .off = PGPU_BRANCH_CX_FF },
++		};
++		static const char *const labels[] = {
++			"cxo-aon0x9004", "demet0x900c", "ahb0x90c8", "cx-ff0x90f8"
++		};
++		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		uint32_t cx_out = 0, gx_out = 0;
++		enum pgpu_clock_result result = pgpu_cx_hold_branch_matrix(&io,
++		    probes, sizeof(probes) / sizeof(probes[0]), 2, &cx_out, &gx_out,
++		    (void *)cc, pgpu_cc_live_report);
++		for (unsigned i = 0; i < sizeof(probes) / sizeof(probes[0]); ++i) {
++			printf("PERIDOT GPU: BR %s before=%#x during=%#x accepted=%u after=%#x restored=%u already-on=%u\n",
++			    labels[i], probes[i].before, probes[i].during,
++			    probes[i].accepted, probes[i].after, probes[i].restored,
++			    probes[i].already_on);
++		}
++		static const char *const names[] = {
++			"REFUSED live/unknown domain or unreadable branch",
++			"PASS aon pair then gate/sibling toggled, all restores verified",
++			"FAIL CX power-on timeout; collapse restored",
++			"FAIL gate timeout (unused in this stage)",
++			"FAIL gate restore timeout (unused in this stage)",
++			"FAIL CX collapse timeout",
++			"FAIL ownership changed; leave for diagnostic reset",
++			"FAIL hub update timeout (unused in this stage)",
++			"FAIL hub restore timeout (unused in this stage)",
++			"FAIL branch restore timeout; left for diagnostic reset",
++			"FAIL nothing latched; every enable read back off",
++			"PARTIAL some enables latched; see the probe lines"
++		};
++		printf("PERIDOT GPU: branch matrix %s; CX=%#x hw=%#x GX=%#x AHB=%#x cxo-aon=%#x demet=%#x cx-ff=%#x\n",
++		    names[result], cx_out, pgpu_read(cc, PGPU_CX_HW), gx_out,
++		    pgpu_read(cc, PGPU_AHB_CBCR), pgpu_read(cc, PGPU_BRANCH_CXO_AON),
++		    pgpu_read(cc, PGPU_BRANCH_DEMET), pgpu_read(cc, PGPU_BRANCH_CX_FF));
++	}
+ }
+ #endif
