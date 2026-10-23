@@ -1,0 +1,253 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -14,6 +14,9 @@
+  * adds a read-only inventory of the GMU control registers while that tree
+  * is up; mode10 adds a read-only GPU SMMU inventory on the same running
+  * tree, because the GMU firmware's main image is fetched through that SMMU.
++ * Mode10's first attempt died on SMR[24]; mode11 repeats the inventory with
++ * every array bounded by the SMMU ID registers (sIDR0 NUMSMRG, sIDR1 NUMCB)
++ * and also reports the post-stage vote/gate state.
+  * No firmware load, GPU core access, GMU/SMMU writes.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -142,7 +145,7 @@
+ 	inv->fence = pgpu_read(g, PGPU_GMU_AHB_FENCE_STATUS);
+ }
+ 
+-/* ---- 0124: read-only GPU SMMU inventory ----
++/* ---- 0124/0125: read-only GPU SMMU inventory ----
+  * The gen7 GMU image's main code sits at GMU IOVA0x4000, not in ITCM, so the
+  * CM3 cannot fetch it before the GPU SMMU translates SID5. The live DT node
+  * kgsl-smmu@3da0000 (qcom,qsmmu-v500) has reg base0x3da0000/0x40000 and
+@@ -150,9 +153,20 @@
+  * while the 0121 stage holds CX. That stage also enables gpu_cc_ahb(0x90c8)
+  * and the gpu_cc_hlos1_vote_gpu_smmu vote(0x7000), the SMMU's AHB and TCU
+  * clocks, so the inventory runs from the same observe hook. It only reads
+- * the global control/ID/fault registers, every stream-match entry and the
+- * registers of every context bank whose CBAR is valid. No TCU/TBU block
++ * the global control/ID/fault registers, the stream entries and the
++ * registers of every implemented context bank. No TCU/TBU block
+  * access, no write, no context or table allocation, no firmware.
++ *
++ * 0124 died with a synchronous external abort that the panic registers place
++ * at base+0x860, i.e. SMR[24]: the block had already answered sCR0..sACR,
++ * IDR0..7, GFAR/GFSR and SMR[0..23]. The SMMU was alive; the 256-entry loop
++ * ran past an IDR-sized array. 0125 derives every array length from the ID
++ * registers, as the vendor arm-smmu driver does: sIDR0[7:0] is the number of
++ * SMR/S2CR groups, sIDR1[7:0] the context banks, sIDR1[31] selects a 64K or
++ * 4K page shift and sIDR1[30:28] sizes the global register region. SMR/S2CR
++ * validity follows the enabled EXIDS rule (sIDR0[8] and sCR0[3]: S2CR[10] when enabled,
++ * otherwise sSMR[31]) and the S2CR type is decoded. Any loop whose registers fall
++ * outside the mapped 0x40000 window is refused instead of read.
+  */
+ #define PGPU_SMMU_BASE 0x3da0000u
+ #define PGPU_SMMU_BYTES 0x40000u
+@@ -172,7 +186,7 @@
+ #define PGPU_SMMU_STREAMS 256u
+ #define PGPU_SMMU_BANKS 32u
+ #define PGPU_SMMU_SMR_VALID (1u << 31)
+-#define PGPU_SMMU_CBAR_VALID 1u
++#define PGPU_SMMU_SMR_EXIDS (1u << 10)
+ #define PGPU_SMMU_SID_GMU 5u
+ #define PGPU_SMMU_NO_MATCH 0xffffffffu
+ 
+@@ -180,6 +194,8 @@
+ 	uint32_t scr0, scr1, scr2, acr;
+ 	uint32_t id[8];
+ 	uint32_t gfar, gfsr;
++	unsigned smr_count, cb_count;
++	uint32_t cb_base;
+ 	unsigned smr_valid, cb_valid;
+ 	unsigned sid5_smr;	/* PGPU_SMMU_NO_MATCH when SID5 has none */
+ 	uint32_t sid5_s2cr;
+@@ -196,15 +212,30 @@
+ };
+ 
+ static bool
+-pgpu_smmu_sid_match(uint32_t smr, unsigned sid)
++pgpu_smmu_sid_match(uint32_t smr, unsigned sid, bool exids)
+ {
+ 	unsigned mask;
+ 
+-	if (!(smr & PGPU_SMMU_SMR_VALID)) {
++	if (!exids && !(smr & PGPU_SMMU_SMR_VALID)) {
+ 		return false;
+ 	}
+-	mask = (smr >> 16) & 0xffu;
++	mask = (smr >> 16) & (exids ? 0xffffu : 0x7fffu);
+ 	return ((smr & 0xffffu) & ~mask) == (sid & ~mask);
++}
++
++static const char *
++pgpu_smmu_type_name(uint32_t s2cr)
++{
++	switch ((s2cr >> 16) & 3u) {
++	case 0:
++		return "translate";
++	case 1:
++		return "bypass";
++	case 2:
++		return "fault";
++	default:
++		return "reserved";
++	}
+ }
+ 
+ static void
+@@ -224,39 +255,75 @@
+ 	}
+ 	inv->gfar = pgpu_read(s, PGPU_SMMU_sGFAR);
+ 	inv->gfsr = pgpu_read(s, PGPU_SMMU_sGFSR);
++
++	/* The arrays are sized by the ID registers. Reading an unimplemented
++	 * entry returns an external abort, so derive every bound first. */
++	inv->smr_count = inv->id[0] & 0xffu;
++	inv->cb_count = inv->id[1] & 0xffu;
++	unsigned pgshift = (inv->id[1] & (1u << 31)) ? 16u : 12u;
++	unsigned numpage = 1u << (((inv->id[1] >> 28) & 7u) + 1u);
++	unsigned cb_size = 1u << pgshift;
++	inv->cb_base = numpage << pgshift;
++	printf("PERIDOT GPU: SMMU geometry IDR0=%#x SMR=%u EXIDS=%u IDR1=%#x CB=%u page=%u cb-base=%#x\n",
++	    inv->id[0], inv->smr_count, (inv->id[0] >> 8) & 1u,
++	    inv->id[1], inv->cb_count, cb_size, inv->cb_base);
++
+ 	inv->smr_valid = 0;
+ 	inv->sid5_smr = PGPU_SMMU_NO_MATCH;
+ 	inv->sid5_s2cr = 0;
+-	for (i = 0; i < PGPU_SMMU_STREAMS; ++i) {
+-		uint32_t smr = pgpu_read(s, PGPU_SMMU_SMR + i * 4);
+-		uint32_t s2cr;
+-
+-		if (!(smr & PGPU_SMMU_SMR_VALID)) {
+-			continue;
+-		}
+-		s2cr = pgpu_read(s, PGPU_SMMU_S2CR + i * 4);
+-		++inv->smr_valid;
+-		if (pgpu_smmu_sid_match(smr, PGPU_SMMU_SID_GMU) &&
+-		    inv->sid5_smr == PGPU_SMMU_NO_MATCH) {
+-			inv->sid5_smr = i;
+-			inv->sid5_s2cr = s2cr;
+-		}
+-		printf("PERIDOT GPU: SMMU SMR%u=%#x S2CR%u=%#x%s\n",
+-		    i, smr, i, s2cr,
+-		    pgpu_smmu_sid_match(smr, PGPU_SMMU_SID_GMU) ?
+-		    " sid5" : "");
+-	}
++	if (inv->smr_count == 0 || inv->smr_count > PGPU_SMMU_STREAMS) {
++		printf("PERIDOT GPU: SMMU no usable SMR array (IDR0=%#x); stream loop skipped\n",
++		    inv->id[0]);
++	} else {
++		bool exids = (inv->id[0] & (1u << 8)) != 0 &&
++		    (inv->scr0 & (1u << 3)) != 0;
++		for (i = 0; i < inv->smr_count; ++i) {
++			uint32_t smr = pgpu_read(s, PGPU_SMMU_SMR + i * 4);
++			uint32_t s2cr;
++			bool valid;
++
++			if (exids) {
++				s2cr = pgpu_read(s, PGPU_SMMU_S2CR + i * 4);
++				valid = (s2cr & PGPU_SMMU_SMR_EXIDS) != 0;
++			} else {
++				valid = (smr & PGPU_SMMU_SMR_VALID) != 0;
++				if (!valid) {
++					continue;
++				}
++				s2cr = pgpu_read(s, PGPU_SMMU_S2CR + i * 4);
++			}
++			if (!valid) {
++				continue;
++			}
++			++inv->smr_valid;
++			printf("PERIDOT GPU: SMMU SMR%u=%#x S2CR%u=%#x cb=%u type=%s%s\n",
++			    i, smr, i, s2cr, s2cr & 0xffu,
++			    pgpu_smmu_type_name(s2cr),
++			    pgpu_smmu_sid_match(smr, PGPU_SMMU_SID_GMU, exids) ?
++			    " sid5" : "");
++			if (pgpu_smmu_sid_match(smr, PGPU_SMMU_SID_GMU, exids) &&
++			    inv->sid5_smr == PGPU_SMMU_NO_MATCH) {
++				inv->sid5_smr = i;
++				inv->sid5_s2cr = s2cr;
++			}
++		}
++	}
++
+ 	inv->cb_valid = 0;
+-	for (i = 0; i < PGPU_SMMU_BANKS; ++i) {
+-		uint32_t cbar = pgpu_read(s, PGPU_SMMU_CBAR + i * 4);
++	if (inv->cb_count == 0 || inv->cb_count > PGPU_SMMU_BANKS ||
++	    inv->cb_base < cb_size ||
++	    inv->cb_base + inv->cb_count * cb_size > PGPU_SMMU_BYTES) {
++		printf("PERIDOT GPU: SMMU CB window invalid base=%#x n=%u; skipped\n",
++		    inv->cb_base, inv->cb_count);
++		return;
++	}
++	for (i = 0; i < inv->cb_count; ++i) {
++		uint32_t cbar = pgpu_read(s, cb_size + i * 4);
+ 		uint32_t cba2r;
+ 		vm_offset_t cb;
+ 
+-		if (!(cbar & PGPU_SMMU_CBAR_VALID)) {
+-			continue;
+-		}
+-		cba2r = pgpu_read(s, PGPU_SMMU_CBA2R + i * 4);
+-		cb = s + PGPU_SMMU_CB + i * PGPU_SMMU_CB_SIZE;
++		cba2r = pgpu_read(s, cb_size + 0x800u + i * 4);
++		cb = s + inv->cb_base + i * cb_size;
+ 		++inv->cb_valid;
+ 		printf("PERIDOT GPU: SMMU CB%u CBAR=%#x CBA2R=%#x SCTLR=%#x ACTLR=%#x\n",
+ 		    i, cbar, cba2r, pgpu_read(cb, 0x000), pgpu_read(cb, 0x004));
+@@ -287,7 +354,7 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10) || attempted) {
++	    mode != 10 && mode != 11) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -686,7 +753,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10) {
++	if (mode == 10 || mode == 11) {
++		bool diag = (mode == 11);
+ 		uint32_t reset = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		if (reset < 30 || reset > 3600) {
+@@ -708,11 +776,12 @@
+ 			printf("PERIDOT GPU: GMU/SMMU map failed\n");
+ 			return;
+ 		}
+-		printf("PERIDOT GPU: SMMU inventory: read-only SMMUv2 base0x3da0000, full SMR/S2CR window, %u banking slots, SID%u\n",
+-		    PGPU_SMMU_BANKS, PGPU_SMMU_SID_GMU);
+-		printf("PERIDOT GPU: SMMU pre CX-BCR=%#x GMU-BCR=%#x smmu-vote=%#x ahb=%#x\n",
++		printf("PERIDOT GPU: SMMU inventory%s: read-only SMMUv2 base0x3da0000, IDR-bounded SMR/S2CR and CBAR/CBA2R arrays, SID%u\n",
++		    diag ? " (0125)" : "", PGPU_SMMU_SID_GMU);
++		printf("PERIDOT GPU: SMMU pre CX-BCR=%#x GMU-BCR=%#x smmu-vote=%#x ahb=%#x cx-ff=%#x\n",
+ 		    pgpu_read(cc, 0x9088), pgpu_read(cc, 0x9164),
+-		    pgpu_read(cc, 0x7000), pgpu_read(cc, 0x90c8));
++		    pgpu_read(cc, 0x7000), pgpu_read(cc, 0x90c8),
++		    pgpu_read(cc, 0x90f8));
+ 		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
+ 		struct pgpu_power_io gcc_io = { (void *)gcc, pgpu_power_read, pgpu_power_write, delay };
+ 		struct pgpu_gmu_clock_probe probe = { 0 };
+@@ -750,6 +819,18 @@
+ 		} else {
+ 			printf("PERIDOT GPU: SMMU inv SID%u -> SMR%u S2CR=%#x\n",
+ 			    PGPU_SMMU_SID_GMU, sinv.sid5_smr, sinv.sid5_s2cr);
++		}
++		if (diag) {
++			printf("PERIDOT GPU: SMMU post CX-BCR=%#x GMU-BCR=%#x vote=%#x ahb=%#x cx-gmu=%#x hub-aon=%#x\n",
++			    pgpu_read(cc, 0x9088), pgpu_read(cc, 0x9164),
++			    pgpu_read(cc, 0x7000), pgpu_read(cc, 0x90c8),
++			    pgpu_read(cc, 0x90e4), pgpu_read(cc, 0x9198));
++			if (sinv.sid5_smr != PGPU_SMMU_NO_MATCH) {
++				printf("PERIDOT GPU: SMMU inv SID%u type=%s cb=%u\n",
++				    PGPU_SMMU_SID_GMU,
++				    pgpu_smmu_type_name(sinv.sid5_s2cr),
++				    sinv.sid5_s2cr & 0xffu);
++			}
+ 		}
+ 		printf("PERIDOT GPU: GMU clock probe off=%u/%u live=%u/%u programmed=%u/%u counter=%u powered=%u cx=%u branches=%u rcg=%u; gmuCFG=%#x->%#x hubCFG=%#x->%#x CX=%#x hw=%#x GX=%#x\n",
+ 		    probe.measured_off, (unsigned)N, probe.measured_live,

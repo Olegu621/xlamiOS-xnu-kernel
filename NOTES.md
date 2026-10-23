@@ -4,6 +4,24 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0125 preparation on Windows PC (2026-10-23)
+
+- Development moved to the Windows PC; POCO F6 is detected locally in root
+  recovery. No notebook is required for subsequent editing or device cycles.
+- Recovered 0124 source from CI artifact buildtree.tgz and retained the
+  unfinished OpenCode mode11 source. New patch 0125 bounds SMR/S2CR and
+  context-bank loops using IDR0/IDR1 and checks mapped context-window size.
+- Review also removed the incorrect CBAR bit0 validity test (bit0 belongs
+  to VMID), derives GR1 addresses from IDR page size, fixes legacy SMR mask
+  width, and requires sCR0.EXIDENABLE as well as IDR0.EXIDS for EXID validity.
+  Register definitions checked against upstream Linux v6.6 arm-smmu.h.
+- Forward application matches intended source; reverse restores 0124 bytes.
+  Earlier local compile and six clock harness suites passed BEFORE these
+  additional review fixes; current full compilation awaits GitHub Actions.
+- Hardware 0125 NOT booted. GPU firmware/acceleration remain unimplemented.
+- Work checkout: Documents/Codex/2026-10-23/new-chat-2/work/xlamiOS.
+  Transfer archives and baseline artifacts are in work/xlamiOS-transfer.
+
 ### 0121 GMU clocks, 0122 map fault, 0123 GMU inventory (2026-10-23, autonomous)
 
 - 0121 (peridotgpu=8, CI 39889811754 SUCCESS commit 9cdd149, kernel
