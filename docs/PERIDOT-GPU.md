@@ -177,6 +177,32 @@ as a shortcut.
    cxo-aon are always-on at19.2MHz, memnoc-gfx and gx-gfx3d are off.
    Every debug register was restored and both domains returned to their
    handoff values (CX0x22f801, hw0x2800010a, GX0x22f801).
+   **0121-0123: GMU clock tree measured, gen7 GMU map corrected, first
+   GMU inventory.** 0121 (`peridotgpu=8`) programmed gmu_clk_src (0x602,
+   GPLL0/1.5 = 200 MHz) and hub_clk_src (0x505, GPLL0/3 = 200 MHz),
+   enabled the GMU branches and measured ahb/cx-gmu/hub-aon/hub-cx-int at
+   200 MHz, memnoc-gfx at 806 MHz (GPU PLL0 already locked), gx off; CX
+   and both RCGs were restored. Its "branch restore timeout" was a false
+   negative from comparing the read-only halt bit31; the enable bit (bit0)
+   was set and restored. 0122 (`peridotgpu=9`) fixed that check and added
+   the read-only inventory, but used redwood-relative GMU offsets and took
+   a synchronous external abort at 0x3d7c000 (far 0xfffffe8ffb8a0000)
+   with no write; the diagnostic timer reset the phone. The KGSL/Sheng
+   convention (XML dword offsets relative to GPU base 0x3d00000, so
+   GMU-relative = dword*4 - 0x68000 for peridot) gives CM3_SYSRESET
+   0x16000, FW_INIT 0x16070, HFI 0x16600, AO_INTR 0x26c14, ITCM_START
+   0x5000, DTCM_START 0x9000. 0123 (`peridotgpu=9`) PASSED: sysreset=1,
+   fwinit=0, cfg=0x4052, always-on counter ticking (0x85554b->0x85aac0 per
+   1 ms), sptprac=0x3, rpmh=0xf, HFI/AO empty (ao-busy 0x30000000), tree at
+   200 MHz and fully restored. The GMU is alive and held in reset; no
+   firmware has ever run.
+   The GMU image (80680 bytes, 15 KGSL records) keeps its main Thumb
+   payload at GMU IOVA 0x4000/0x1381c (16 MiB cache region), the vector
+   table at 0x0 (SP 0x10007f80, reset 0x105), DTCM payloads at
+   0x10007f98/0x10007fdc and preallocations at 0x100000, 0x200000,
+   0x300000, 0x60000000+0x1000, 0x60001000+0x1000. Starting the CM3
+   therefore requires the GPU SMMU (GMU SID 5) with those IOVAs backed by
+   GMU-visible physical memory; ITCM alone is not enough.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU

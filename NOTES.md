@@ -4,6 +4,63 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0121 GMU clocks, 0122 map fault, 0123 GMU inventory (2026-10-23, autonomous)
+
+- 0121 (peridotgpu=8, CI 39889811754 SUCCESS commit 9cdd149, kernel
+  sha256 fb3b0ffc..., image shim-boot-0121-gmu.img sha256 85ff2f4a...,
+  cycle-0121-gmu) programs gmu_clk_src 0x602 (GPLL0_OUT_MAIN_DIV 1.5 ->
+  200MHz) and hub_clk_src 0x505 (GPLL0/3 -> 200MHz), enables the GMU
+  branches and measures the running tree: ahb 19.2/200.0MHz, cx-gmu
+  0/19.2/200.0, cxo 0/19.2/19.2, hub-aon 19.2/19.2/200.1, hub-cx-int
+  0/19.2/200.0, memnoc-gfx 0/0/806.0, cxo-aon 19.2/19.2/19.2, gx 0/0/0.
+  gmuCFG 0->0x602, hubCFG 0->0x505, CX 0x22f801, hw 0x2800010a, GX
+  0x22f801; counter/powered/cx/rcg all 1. The stage's only failure was a
+  false "branch restore timeout": the restore check compared bit31 (the
+  read-only halt status) instead of the enable bit. CX and both RCGs were
+  restored. memnoc-gfx at 806MHz shows GPU PLL0 already runs at ~806MHz,
+  a second candidate GMU/GPU source.
+- 0122 (peridotgpu=9, CI 39891304315 SUCCESS commit 616ac83, kernel
+  b9197218..., image shim-boot-0122-gmu-inv.img sha256 bb9ccb57...,
+  cycle-0122-gmu-inv) adds the observe hook (branch check now bit0 only)
+  and a read-only GMU inventory, but uses the redwood-relative offsets
+  (CM3 at 0x14000). The first read, 0x3d68000+0x14000=0x3d7c000, hits a
+  hole in the gen7 GMU map: synchronous external abort (esr
+  0x96000010), far 0xfffffe8ffb8a0000; no GMU write, diagnostic reset
+  returned the phone to recovery.
+- The correct map is now measured from the phone's own vendor_boot DT and
+  the pinned kgsl/a6xx_gmu.xml register list:
+  * phone DT: qcom,gen7-gmu@3d69000 reg 0x3d68000/0x37000,
+    0x0b280000/0x10000 (PDC), 0x3d40000/0x10000 (AO); GPUCC
+    qcom,cliffs-gpucc 0x3d90000/0xa000. The KGSL/Sheng convention is that
+    the XML dword offsets are relative to the GPU base 0x3d00000, so the
+    GMU-relative offset is (dword<<2) - 0x68000 (NativeAdreno derives the
+    same rule as (0x1f888<<2)-0x6a000 for SM8550). GMU SID is 5.
+  * corrected offsets: CM3_SYSRESET 0x16000, BOOT_CONFIG 0x16004,
+    FW_INIT_RESULT 0x16070, CM3_CFG 0x160b4, ALWAYS_ON_COUNTER 0x16220/24,
+    SPTPRAC 0x16340, RPMH 0x163b0, HFI_CTRL 0x16600, HFI_VER 0x16604,
+    AO_INTR 0x26c14, RSCC_ACK 0x26c20, AO_BUSY 0x26c30, FENCE 0x26c4c,
+    ITCM_START 0x5000, DTCM_START 0x9000.
+- 0123 (peridotgpu=9, CI 39893085623 SUCCESS commit 63ef3c2, kernel
+  4fcaf89b..., image shim-boot-0123-gmu-inv.img sha256 eeab9f25...,
+  cycle-0123-gmu-inv) PASSES: sysreset 0x1 (CM3 held in reset), boot 0,
+  fwinit 0 (firmware never ran), cfg 0x4052; always-on counter
+  0x85554b->0x85aac0 across the 1ms delay (runs on the crystal);
+  sptprac 0x3, rpmh 0xf; hfi-ctrl 0, hfi-ver 0, ao-intr 0, rscc-ack 0,
+  ao-busy 0x30000000, fence 0. The eight clock measurements repeat 0121
+  (programmed 200/200/806MHz), branches 1, rcg 1, CX restored. The GMU
+  AHB block is readable while the 0121 tree runs; no GMU write yet.
+- Next: GMU cold start needs the GPU SMMU (GMU SID 5) because the image's
+  main code payload is at GMU IOVA 0x4000/0x1381c inside the 16MiB cache
+  region, not in the 16KiB ITCM (0x1381c bytes of Thumb at 0x4000, vector
+  table at 0x0: SP 0x10007f80, reset 0x105; DTCM 0x10004000/16KiB gets the
+  0x28/0x18-byte payloads at 0x10007f98/0x10007fdc; prealloc blocks
+  0x100000/0x1aa78, 0x200000/0x12c80, 0x300000/0x24bf8,
+  0x60000000+0x1000, 0x60001000+0x1000). So the next two stages are: read
+  the SMMU state (0x3da0000, SCTLR/CBAR/S2CR/TBU) read-only, then set up
+  SMMUv2 stage-1 for SID 5 and load/start the CM3 (ITCM 0x1dc, DTCM
+  0x28+0x18), with FW_INIT_RESULT 0xbabeface as the success signal. No GX
+  power, no CP/SQE, no ZAP.
+
 ### 0119 panic, 0120 fix, and the measured clock state (2026-10-23, autonomous)
 
 - 0119 (peridotgpu=7, CI 39886255457 SUCCESS commit 63f31c7, kernel
