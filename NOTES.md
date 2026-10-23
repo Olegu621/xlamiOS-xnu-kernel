@@ -4,6 +4,33 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0134 real GMU instruction-fetch permission fault;0135 privilege/policy (2026-10-23)
+
+- CI39978394149 SUCCESS/1133dee; imageSHA256
+  cc6916ab11b5b07ec28a40ca03631a08bf7de9d71393b85f92a2736a589ddd33.
+  Tightened automatic-cycle helper accepted its actual timed/panic-reset flags.
+  Recovery returned automatically and console was captured (cycle0134).
+- Physical-width fix is confirmed: all8 NC allocations succeed, every CPU
+  physical mapping checked; complete129-leaf map walks6tables successfully.
+  TCM upload/readback135words and external79900bytes pass. Version4.5.1,
+  HFI2.6.1 read from real DTCM. Context enable/readback and SID5 installed.
+  Actual SCM availability returns1 and GPU_INIT request1 returns success0.
+- CM3 WAS RELEASED. FW_INIT remained0. Real SMMU CB0 FSR0x408/FAR0x4000/
+  FSYNR0=0x120063: permission fault(bit3), level3, privileged instruction
+  fetch, not a translation/absence fault. No real HFI ACK yet.
+- CM3 reset AND GBIF ARB halt acknowledged, context disabled/TLB synced,
+  saved state restored. No panic found; iOS userland/touch proceeded afterward.
+- 0135 matches stock kgsl_gmu_core.c reserve_kernel_block attributes:
+  IOMMU_READ|WRITE|PRIV (executable by default). Previous pages allowed
+  unprivileged access; now ArmSmmu4KPrivileged explicitly selects AP00.
+  It also applies and verifies the measured matching DT ACTLR0x32b while
+  bank0 is disabled, before context programming/TLB synchronization; saved
+  ACTLR restores only after confirmed context stop. Separate fault decode.
+- Source policy verified in MiCode peridot-u-oss arm-smmu-qcom.c:
+  qsmmuv500_device_group matches SID/mask triplets; qsmmuv500_init_cb writes
+  the selected ACTLR and flushes IOTLB. No fabricated board constants.
+- 0135 compilation and hardware result pending; GPU acceleration unfinished.
+
 ### 0133 hardware failure isolated;0134 pmap cache-width fix (2026-10-23)
 
 - CI39976408363 SUCCESS/b50e0d0. ImageSHA256
