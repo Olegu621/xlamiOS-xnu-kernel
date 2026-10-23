@@ -1,0 +1,60 @@
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 06:04:58.196399651 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 06:04:58.199399636 +0300
+@@ -72,29 +72,35 @@
+ }
+ 
+ /* ---- 0122: read-only GMU inventory ----
+- * GMU registers are GMU_WORD(n)=4*n from the GMU base; the live DT node
+- * qcom,gmu has reg 0x3d68000 size0x34000 (its unit address differs). The
+- * inventory observes what the boot loader left: CM3 reset/boot state,
+- * firmware init result, the always-on counter (19.2MHz crystal), the
+- * power/clock status, RPMh power state and the HFI/AO handshake. It runs
+- * inside the 0121 clock stage while the GMU tree is up and CX is live,
+- * before the branches are restored, so the AHB access is clocked. Read
+- * only: no GMU write, no firmware load, no GPU core or SMMU access.
++ * GMU register addresses come from the pinned a6xx_gmu.xml dword offsets,
++ * which are relative to the GPU base, not to the GMU node: physical =
++ * 0x3d00000 + (dword << 2), so the GMU-relative offset for peridot is
++ * (dword << 2) - (0x3d68000 - 0x3d00000) = (dword << 2) - 0x68000. The live
++ * DT node qcom,gen7-gmu has reg 0x3d68000 size0x37000 (its unit address
++ * differs). 0122 used the redwood-relative offsets (0x14000 class) and the
++ * first read hit the hole at 0x3d7c000: external abort, diagnostic reset
++ * recovered. The inventory observes what the boot loader left: CM3
++ * reset/boot state, firmware init result, the always-on counter (19.2MHz
++ * crystal), the power/clock status, RPMh power state and the HFI/AO
++ * handshake. It runs inside the 0121 clock stage while the GMU tree is up
++ * and CX is live, before the branches are restored, so the AHB access is
++ * clocked. Read only: no GMU write, no firmware load, no GPU core or SMMU
++ * access.
+  */
+-#define PGPU_GMU_CM3_SYSRESET 0x14000u
+-#define PGPU_GMU_CM3_BOOT_CONFIG 0x14004u
+-#define PGPU_GMU_CM3_FW_INIT_RESULT 0x14070u
+-#define PGPU_GMU_CM3_CFG 0x140b4u
+-#define PGPU_GMU_ALWAYS_ON_COUNTER_L 0x14220u
+-#define PGPU_GMU_ALWAYS_ON_COUNTER_H 0x14224u
+-#define PGPU_GMU_SPTPRAC_PWR_CLK_STATUS 0x14340u
+-#define PGPU_GMU_RPMH_POWER_STATE 0x143b0u
+-#define PGPU_GMU_HFI_CTRL_STATUS 0x14600u
+-#define PGPU_GMU_HFI_VERSION_INFO 0x14604u
+-#define PGPU_GMU_AO_HOST_INTERRUPT_STATUS 0x24c14u
+-#define PGPU_GMU_RSCC_CONTROL_ACK 0x24c20u
+-#define PGPU_GMU_AO_GPU_CX_BUSY_STATUS 0x24c30u
+-#define PGPU_GMU_AHB_FENCE_STATUS 0x24c4cu
++#define PGPU_GMU_CM3_SYSRESET 0x16000u
++#define PGPU_GMU_CM3_BOOT_CONFIG 0x16004u
++#define PGPU_GMU_CM3_FW_INIT_RESULT 0x16070u
++#define PGPU_GMU_CM3_CFG 0x160b4u
++#define PGPU_GMU_ALWAYS_ON_COUNTER_L 0x16220u
++#define PGPU_GMU_ALWAYS_ON_COUNTER_H 0x16224u
++#define PGPU_GMU_SPTPRAC_PWR_CLK_STATUS 0x16340u
++#define PGPU_GMU_RPMH_POWER_STATE 0x163b0u
++#define PGPU_GMU_HFI_CTRL_STATUS 0x16600u
++#define PGPU_GMU_HFI_VERSION_INFO 0x16604u
++#define PGPU_GMU_AO_HOST_INTERRUPT_STATUS 0x26c14u
++#define PGPU_GMU_RSCC_CONTROL_ACK 0x26c20u
++#define PGPU_GMU_AO_GPU_CX_BUSY_STATUS 0x26c30u
++#define PGPU_GMU_AHB_FENCE_STATUS 0x26c4cu
+ 
+ struct pgpu_gmu_inventory {
+ 	uint32_t sysreset, boot_config, fw_init, cfg;
