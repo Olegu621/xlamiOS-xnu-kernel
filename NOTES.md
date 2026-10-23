@@ -5,6 +5,17 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0141 source correction before hardware deployment
+
+- CI40006174225 SUCCESS/6828761 compiles the complete0140 GPU phase.
+  No0140 phone boot: source review caught the sleep confirmation polling
+  SEQ_BUSY(word0x101) instead of RSC_STATUS0_DRV0(word4), bit16.
+-0141 uses the actual status register, bounds the following GX collapse
+  observation, and permits up to100ms for posted GPU writes to become CPU
+  visible after the real raw-command ACK/idle. No CPU expected-value store.
+- Next: compile0141, pack all3 verified images, temporary mode20 boot with
+ 180s timer, inspect actual OOB/CP/PAS13/MEM_WRITE and shutdown results.
+
 ### 0140 GPU execution phase implemented; hardware result pending
 
 - Mode20 builds on the real0139 START pass. Copies actual SQE code (skips

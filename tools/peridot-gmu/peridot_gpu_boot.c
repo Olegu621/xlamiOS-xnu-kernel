@@ -251,10 +251,14 @@ static void pggx_stop(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
         if (!idle) panic("PERIDOT GPU slumber unconfirmed; retaining clocks and translations");
         pgcb_gwrite(gmu,GEN7_GMU_CM3_SYSRESET,1);
         pgcb_gwrite(gmu,GEN7_GMU_RSCC_CONTROL_REQ,1);
-        bool sleep=pgcb_poll(rsc,0x101*4,1u<<16,1u<<16,100000);
+        /* RSC_STATUS0_DRV0 is word4. Word0x101 is SEQ_BUSY, a different
+         * register which cannot acknowledge the sleep request's bit16. */
+        bool sleep=pgcb_poll(rsc,4*4,1u<<16,1u<<16,100000);
         if (sleep) pgcb_gwrite(gmu,GEN7_GMU_RSCC_CONTROL_REQ,0);
+        bool collapsed=sleep && pgcb_poll(cc,PGPU_GX_GDSCR,
+            PGPU_ON|PGPU_COLLAPSE|PGPU_HW_CONTROL|PGPU_OVERRIDE,PGPU_COLLAPSE,100000);
         printf("PERIDOT GPU: RSC sleep=%u GX=%#x\n",sleep,pgcb_read(cc,PGPU_GX_GDSCR));
-        if (!sleep || !pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR)))
+        if (!collapsed || !pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR)))
             panic("PERIDOT GPU collapse unconfirmed; retaining clocks and translations");
     }
     if (pggx.routed) {
@@ -304,7 +308,11 @@ static bool pggx_boot(struct pg_hfi *h, vm_offset_t gpu, vm_offset_t gmu, vm_off
                 uint32_t write[]={0,pggx_packet(0x3d,4),pggx.fence_va,0,0x7350cafe,0xace01340,
                     pggx_packet(0x26,0)};
                 bool idle=pggx_raw(h,gpu,gmu,smmu,write,7,sequence);
-                __asm__ volatile("dsb sy" ::: "memory");
+                for (unsigned wait=0;idle && wait<10000;++wait) {
+                    __asm__ volatile("dsb sy" ::: "memory");
+                    if (fence[0]==0x7350cafe && fence[1]==0xace01340) break;
+                    delay(10);
+                }
                 pggx.completed=idle && fence[0]==0x7350cafe && fence[1]==0xace01340;
                 printf("PERIDOT GPU: actual MEM_WRITE completion=%u observed=%#x/%#x\n",
                     pggx.completed,fence[0],fence[1]);
