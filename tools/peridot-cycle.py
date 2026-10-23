@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Temporary diagnostic boot -> automatic recovery return -> console capture.
 
-The image must contain sweetdiagreset=N or sweetpanicreset=1 (patch 0092).
+The image must contain sweetdiagreset=30..3600 and sweetpanicreset=1.
 Start with exactly one phone in root recovery. Sets only the 32-byte BCB
 boot-recovery command; never flashes a partition or replaces a boot image.
 """
 import argparse
 import hashlib
 import json
+import struct
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,40 @@ def run(args, timeout=15, check=True):
     return subprocess.run(args, timeout=timeout, check=check, capture_output=True)
 
 
+def timed_cmdline(blob, timeout):
+    """Validate the packed payload before issuing any device command."""
+    if len(blob) < 1652 or blob[:8] != b'ANDROID!':
+        raise ValueError('Expected Android boot image')
+    kernel = struct.unpack_from('<I', blob, 8)[0]
+    page = struct.unpack_from('<I', blob, 36)[0]
+    version = struct.unpack_from('<I', blob, 40)[0]
+    if version != 2 or page not in (2048, 4096, 8192, 16384):
+        raise ValueError('Unsupported boot image header')
+    offset = page + ((kernel + page - 1) // page) * page
+    if offset + 0x2a8 > len(blob) or blob[offset:offset + 8] != b'SWEETXNU':
+        raise ValueError('Missing complete XNU payload header')
+    field = blob[offset + 0x48:offset + 0x2a8]
+    if b'\0' not in field:
+        raise ValueError('Unterminated payload command line')
+    command = field.split(b'\0', 1)[0].decode('ascii')
+    args = {}
+    for token in command.split():
+        if '=' not in token:
+            continue
+        key, value = token.split('=', 1)
+        if key in args:
+            raise ValueError(f'Duplicate payload argument: {key}')
+        args[key] = value
+    seconds = int(args.get('sweetdiagreset', '0'), 0)
+    if not 30 <= seconds <= 3600 or args.get('sweetpanicreset') != '1':
+        raise ValueError('Automatic cycle requires timed reset and panic reset')
+    if args.get('peridotmanual') == '1':
+        raise ValueError('Manual-return image cannot use the automatic cycle')
+    if timeout < seconds + 60:
+        raise ValueError('Cycle timeout must allow reset plus 60 seconds for recovery')
+    return command
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('image', type=Path)
@@ -25,6 +60,8 @@ def main():
     ap.add_argument('--timeout', type=int, default=420)
     a = ap.parse_args()
     image = a.image.resolve(strict=True)
+    blob = image.read_bytes()
+    command_line = timed_cmdline(blob, a.timeout)
     a.out.mkdir(parents=True, exist_ok=True)
     rows = [l.split() for l in run(['adb', 'devices']).stdout.decode().splitlines()[1:] if l.strip()]
     if len(rows) != 1 or rows[0][1] != 'recovery':
@@ -53,7 +90,8 @@ def main():
         sys.exit('Fastboot did not appear; BCB backup is in the output directory')
     boot = run(fastboot + ['boot', str(image)], timeout=45)
     (a.out / 'fastboot-boot.txt').write_bytes(boot.stdout + boot.stderr)
-    metadata = {'image': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}
+    metadata = {'image': str(image), 'sha256': hashlib.sha256(blob).hexdigest(),
+                'cmdline': command_line}
     (a.out / 'boot.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print('Temporary boot accepted; waiting for diagnostic reset...', flush=True)
     start = time.monotonic()
@@ -84,5 +122,5 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
         sys.exit(str(e))

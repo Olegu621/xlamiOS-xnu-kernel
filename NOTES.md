@@ -23,6 +23,13 @@
   After retyping, verify every CPU-page physical mapping still matches.
 - Private board plan now also contains the160-dword BW table with GMU_AB,
   based on actual CMD-DB BCM units/widths/VCDs and DT bandwidth levels.
+- CI39978394149 builds1133dee. Auto-cycle helper now validates the packed
+  Android-v2/XNU command line BEFORE device commands: bounded diagnostic
+  timer, panic reset1, no manual-return flag/duplicate arguments, sufficient
+  recovery timeout. First use of the tightened helper will be cycle0134.
+- Further private DT capture confirms gfx3d_user SID0, secure SID2, GMU SID5.
+  Vendor qcom,actlr triplet=(0,1023,0x32b); owned CB0 handoff ACTLR0x3.
+  Audit/apply the board ACTLR policy before the submission-stage driver.
 - 0134 compilation and device attempt pending. Acceleration remains unfinished.
 
 ### 0133 combined cold boot; automatic return reauthorized (2026-10-23)
