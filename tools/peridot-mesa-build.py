@@ -90,6 +90,13 @@ def main():
          '   if (!disk_cache_get_function_identifier(ir3_disk_cache_init, &build_id))\n'
          '      return;\n'
          '   _mesa_sha1_final(&build_id, id_sha1);\n')
+    edit(mesa / 'src/gallium/drivers/freedreno/freedreno_screen.c',
+         '#include <sys/sysinfo.h>', '#include "util/os_misc.h"')
+    edit(mesa / 'src/gallium/drivers/freedreno/freedreno_screen.c',
+         '   struct sysinfo si;\n   sysinfo(&si);\n   screen->ram_size = si.totalram;',
+         '   uint64_t system_memory;\n'
+         '   if (!os_get_total_physical_memory(&system_memory))\n      goto fail;\n'
+         '   screen->ram_size = system_memory;')
     edit(mesa / 'src/freedreno/drm/freedreno_bo.c', '#include "freedreno_priv.h"\n',
          '#include "freedreno_priv.h"\n'
          '#ifdef __APPLE__\nvoid *sweet_drm_bo_map(int fd, uint64_t offset);\n'
