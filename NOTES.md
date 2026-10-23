@@ -21,6 +21,15 @@
   route quarantine, context disable/TLB sync and saved-register restoration.
   Unconfirmed cleanup panics with allocations/clocks retained. All remapped
   backing allocations remain pinned until reboot. No firmware bytes in Git.
+- CI39976408363 is building b50e0d0. The private Windows capture now also
+  has work/peridot-gpu-dt.tar/.json, work/peridot-cmd-db.txt and derived
+  work/peridot-power-plan.json (outside Git). Debugfs was temporarily mounted
+  in recovery to read CMD-DB. No KGSL node exists in this recovery kernel.
+- Actual board:11 GPU OPPs255..1100MHz, initial index10; GMU220MHz/corner64
+  and550MHz/corner128. ARC/BCM values were read from this phone, not borrowed
+  from sheng. Lowest GX vote0x00380201, optional CX dependency absent
+  (0xffffffff), HFI2.6.1 PERF table49dwords derived. Firmware DTCM declares
+  core0x40050001/HFI0x20060001. BW packing/startup integration still pending.
 - Implementation prepared; compilation and actual device exchange pending.
   HWSCHED performance/bandwidth/startup, GPU commands and iOS rendering are
   still required even if this GMU exchange succeeds. Acceleration is not ready.
