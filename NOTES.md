@@ -4,6 +4,46 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0116 hardware result + 0117 branch matrix (2026-10-23, autonomous)
+
+- CI run 39875590980 SUCCESS (commit 6443f04); kernel
+  sha256 7a125217...; image shim-boot-0116-hub.img sha256 b386ea8e...
+  (payload 16666656 bytes, cmdline peridotgpu=4 sweetgpuhold=100
+  sweetdiagreset=60). Cycle from recovery: fastboot accepted, the timed
+  reset returned to recovery, console pulled to
+  research/diagnostics-20261022/cycle-0116-hub/ (132323 bytes).
+- Mode4 ran exactly as designed and the handoff inventory is again
+  identical to 0112. gpll0-vote (GCC0x52020) reads 0x11, main vote set.
+- CC-live#1 (CX live, before any clock write) finally captured the live
+  inventory: CX-gdscr 0x22f801 -> 0xf822f800, CX-hw 0x2800010a ->
+  0x80000202, cx-gmu 0x80002001 -> 0x2001, cxo 0x80000001 -> 0x1, hub-cx
+  0x80000001 -> 0x1; hub-aon/demet stay 0x1, memnoc/smmu-vote/cx-ff stay
+  0x80000000, ahb stays 0. So a cbcr bit31 is the halt status (cleared
+  while the branch runs inside the live domain) and bit0 is the enable
+  latch.
+- Hub RCG programming WORKS: after cfg0x503 + UPDATE the readback is cmd0
+  (self-cleared) and cfg0x503; the restore read back0/0 and verified.
+- The AHB gate still refuses: 0x90c8 bit0 never read back in the bounded
+  50ms poll with the hub running. Console: `hub+AHB test FAIL AHB gate
+  never switched on with hub running; original values restored;
+  CX=0x22f801 hw=0x2800010a GX=0x22f801 AHB=0 hubCFG=0 hubCMD=0`. Parent
+  clock liveness is therefore not the blocker.
+- New lead: gpu_cc_cliffs_probe force-enables the "always on" pair
+  cxo-aon (0x9004) and demet (0x900c); XBL left demet on (0x1) but cxo-aon
+  off (0x0), a real difference from the Android state.
+- Patch 0117 (peridotgpu=5, mode5) restores that vendor invariant first,
+  then retries the AHB gate and toggles one HALT-class sibling (cx-ff
+  0x90f8). Branch registers are read-modify-written, singles are restored
+  immediately, the pair last, with bounded10ms polls. Per-branch
+  before/during/accepted/after/restored lines and three live inventories
+  are printed. Outcome codes add BRANCH_RESTORE_TIMEOUT, NONE_LATCHED and
+  PARTIAL_LATCH so a partial latch shows up in the summary line.
+- Host check PASS for all three stages (ASan/UBSan), no leaks or UB; the
+  patch applies and reverses cleanly on the 0116 buildtree.
+- NEXT: CI, image shim-boot-0117-aon.img (peridotgpu=5 sweetdiagreset=60),
+  cycle, then read the BR lines: does cxo-aon latch from XNU at all, does
+  the AHB latch once the pair is on, and does cx-ff behave like the AHB.
+
 ### 0115 hardware result + 0116 hub-RCG stage (2026-10-23, autonomous)
 
 - The phone was already in fastboot with the BCB still at boot-recovery

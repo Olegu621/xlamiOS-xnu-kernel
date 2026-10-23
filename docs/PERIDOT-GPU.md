@@ -131,14 +131,19 @@ as a shortcut.
    only ran after a verified gate, so0115 produced no CC-live lines. The
    gate's parent is the hub RCG (0x919c cmd /0x91a0 cfg), never updated
    before (0/0); the GMU RCG is explicitly parked (0x80000000) and is not
-   on this path. **0116 / `peridotgpu=4` (offline build PASS, CI pending):**
-   holds CX, programs the hub RCG to its only DT frequency (200MHz from
-   GPLL0_OUT_MAIN /3, cfg0x503, CMD update polled until it self-clears),
-   retries the same AHB gate, and prints the live GPUCC inventory before
-   and after the hub update (CC-live1/2) even when the gate still refuses.
-   Restore order is gate, RCG, CX; unknown/busy/parked RCG state and a
-   hardware-controlled cfg are refused before any write. No GMU, GPU core,
-   SMMU, XO or vote access.
+   on this path. **0116 / `peridotgpu=4`: hub RCG proven writable, gate still refuses.**
+   The hub RCG latched cfg0x503 and its UPDATE bit self-cleared; the
+   restore read back0/0. The live inventory finally ran and showed cbcr
+   bit31 is the halt status (cleared for running branches while CX is
+   powered) and bit0 is the enable latch; the configuration AHB gate still
+   never latched with the hub running, so its parent clock is not the
+   blocker. **0117 / `peridotgpu=5`:** restores the vendor probe invariant
+   (always-on cxo-aon0x9004 and demet0x900c), then retries the AHB gate and
+   toggles one HALT-class sibling (cx-ff0x90f8), printing per-branch
+   before/during/accepted/after/restored values plus three live
+   inventories; read-modify-write only, singles restored at once, the pair
+   last, bounded10ms polls, no GMU, GPU core, SMMU, RCG, vote or firmware
+   access.
 2. Collect the phone's matching firmware and hashes through recovery. Validate
    image formats, memory windows and TrustZone/PIL requirements offline.
 3. Bring up CX/clocks, inspect GPU SMMU geometry, then provide private GMU
