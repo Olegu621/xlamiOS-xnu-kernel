@@ -4,6 +4,22 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0130 hardware result and 0131 allocator fix (2026-10-23)
+
+- CI39948057276 SUCCESS,9e3d6cf. Image SHA256
+  7ddb0ee60af990be524cbd02e5b97821fb17d9f0a7e851f358365053c34c91aa.
+- cycle0130: firmware parse0/15records, proving reserved payload/DT consumed
+  by the kernel. HFI allocation then FAILED: vm_page_find_contiguous low
+  page limit262143, five16KiB pages not found. Do not mark HFI init passed.
+- Root cause confirmed in exact XNU IOLib.cpp: supplying physicalAddress to
+  IOMallocContiguous selects IOBufferMemoryDescriptor physicalMask0xffffffff.
+  This conflicts with peridot kernel-managed RAM above4GiB.
+- 0131 uses unrestricted IOMallocContiguous(...,NULL), obtains physical page
+  numbers via pmap_find_phys, verifies every CPU page is consecutive, aligned
+  and below36-bit OAS, then returns the verified base. Applied to table/data
+  and HFI allocations. IOFreeContiguous handles unrestricted allocation too.
+- 0131 compilation/device test pending. No GMU release or acceleration yet.
+
 ### 0130 kernel boot-bundle plumbing (2026-10-23)
 
 - Links HFI17 transport and pinned AdrenoFirmware parser into the probe TU.

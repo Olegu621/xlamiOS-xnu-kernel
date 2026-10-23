@@ -1,0 +1,62 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -32,6 +32,39 @@
+ 
+ /* Build and walk inactive native4K tables over owned physical allocations. */
+ #include <IOKit/IOLib.h>
++
++#include <vm/pmap.h>
++extern ppnum_t pmap_find_phys(pmap_t, addr64_t);
++/* The physicalAddress overload restricts IOBuffer allocations to32 bits.
++ * Allocate without that restriction, then verify actual CPU page mappings. */
++static void *pgpu_allocate(vm_size_t bytes, vm_size_t alignment, IOPhysicalAddress *physical)
++{
++    if (!physical || !bytes || (bytes & PAGE_MASK) || alignment < PAGE_SIZE) return NULL;
++    *physical = 0;
++    void *buffer = IOMallocContiguous(bytes, alignment, NULL);
++    if (!buffer) {
++        printf("PERIDOT GPU: unrestricted allocation failed size=%lu\n", (unsigned long)bytes);
++        return NULL;
++    }
++    ppnum_t first = pmap_find_phys(kernel_pmap, (addr64_t)buffer);
++    uint64_t base = (uint64_t)first << PAGE_SHIFT;
++    bool valid = first && !(base & (alignment-1)) &&
++        base < (UINT64_C(1)<<36) && bytes <= (UINT64_C(1)<<36)-base;
++    for (vm_size_t off = 0; valid && off < bytes; off += PAGE_SIZE) {
++        ppnum_t pp = pmap_find_phys(kernel_pmap, (addr64_t)buffer + off);
++        valid = pp && ((uint64_t)pp << PAGE_SHIFT) == base + off;
++    }
++    if (!valid) {
++        printf("PERIDOT GPU: allocation failed physical continuity/alignment/OAS check\n");
++        IOFreeContiguous(buffer, bytes);
++        return NULL;
++    }
++    *physical = base;
++    printf("PERIDOT GPU: owned allocation size=%lu CPU-pages=%lu physical36=1\n",
++        (unsigned long)bytes, (unsigned long)(bytes/PAGE_SIZE));
++    return buffer;
++}
++
+ #include "peridot_smmu4k.c"
+ #include "peridot_smmu4k_context.c"
+ #include "peridot_smmu4k_program.c"
+@@ -136,7 +169,7 @@
+     if (parsed != AdrenoFirmwareSuccess || count != 15) return;
+     IOPhysicalAddress hfi_pa = 0;
+     const vm_size_t allocation = 0x14000;
+-    uint32_t *shared = IOMallocContiguous(allocation, 0x4000, &hfi_pa);
++    uint32_t *shared = pgpu_allocate(allocation, 0x4000, &hfi_pa);
+     if (!shared) return;
+     struct pg_hfi hfi = {shared, allocation, 0x60002000,
+         (void *)gmu, pgpu_hfi_barrier, pgpu_hfi_notify, 0};
+@@ -155,8 +188,8 @@
+     bool retain = false;
+     IOPhysicalAddress pool_pa = 0, data_pa = 0;
+     const vm_size_t bytes = 0x4000;
+-    uint64_t *pool = IOMallocContiguous(bytes, bytes, &pool_pa);
+-    void *data = IOMallocContiguous(bytes, bytes, &data_pa);
++    uint64_t *pool = pgpu_allocate(bytes, bytes, &pool_pa);
++    void *data = pgpu_allocate(bytes, bytes, &data_pa);
+     if (!pool || !data) {
+         printf("PERIDOT GPU: native4K allocation failed\n");
+         goto out;
