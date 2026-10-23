@@ -5,6 +5,40 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0141 HARDWARE PASS: actual GPU command execution, ZAP and clean shutdown
+
+- Kernel CI40007360442 SUCCESS/508ad3f. ImageSHA256
+ 88c42950b781e98bdb27af656a36942e1dff6562e4745fbbfc66f2c2d0e826d8.
+  Temporary mode20 boot with all3 verified firmware images and180s timer;
+  cycle0141 automatically captured consoleSHA256
+ 8f899d7b399c1b7138d438c631b5e6f6a0a0bde57017f63950a9c138a2565cff.
+- All9 preparation ACKs +10 runtime allocations +START/result0 repeat.
+  Actual CB0 activate/status0 enabled1/readback1, SQE VA402b0000,
+  reglist402d0000, initially-zero observation page402e0000.
+- HFI30 default vote ACK/result0; OOB wake ACK1, GXf8222800. Correct
+  gen7_11_0 register setup, real power-up list54 IFPC/17 preemption pairs.
+- HFI131 CP init11words ACK/result0; idle1/CB0FSR400/GFSR0.
+  PAS13 INIT_IMAGE42000201, MEM_SETUP42000202, AUTH_AND_RESET42000205
+  EACH returns transport0/secure-result0. No signature bypass was used.
+- Actual unsecure switch raw3words ACK/result0 + idle1. MEM_WRITE raw7words
+  ACK/result0 + idle1. CPU reads exactly7350cafe/ace01340 in the initially
+  zero separate observation page. Host code never writes those values there.
+  This is real GPU command completion, not just firmware/queue setup.
+- PREPARE_SLUMBER ACK/result0, idle1, RSC sleep1, GX222801/collapsed1.
+  GPU CB0 disable/sync and GMU reset/drain/CB2 disable/sync all succeed.
+  No panic; normal180s recovery reset. Existing iOS userland continues.
+- Scope: first GPU execution and authentication proven. No triangle/pixels,
+  persistent engine, IOKit BO/IOSurface service or accelerated CA UI yet.
+- Next: retain an explicit long-lived power/SMMU/HFI lease after this genuine
+  completion, supply real BO/IOSurface/submit/fence APIs, finish GLES build,
+  then validate offscreen pixels before connecting CoreAnimation.
+- Independent Mesa pipeline reached520/1079 compilation units. Bison/Flex
+  version issue fixed; next blocker is ir3_disk_cache.c assuming ELF build-id
+  APIs on Darwin despite shader-cache disabled. Use the cross-platform
+  disk_cache_get_function_identifier helper (actual source inspected).
+
+
+
 ### Candidate GLES userspace build prepared (not installed)
 
 - New independent peridot-mesa workflow cross-builds official Mesa25.0.7

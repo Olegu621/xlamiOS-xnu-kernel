@@ -1,3 +1,16 @@
+## Current verified milestone:0141 (2026-10-23)
+
+The GPU itself completed a CP_MEM_WRITE into an initially-zero owned NC page;
+CPU observation found both submitted values7350cafe/ace01340. CP startup,
+PAS13 authenticated ZAP, unsecure switch, raw HFI ACKs/idle, GPU+GMU context
+shutdown and RSC/GX collapse all passed on the actual POCO F6. No SMMU fault
+or panic occurred. CI40007360442/508ad3f; console hashes are in NOTES.md.
+
+Accelerated iOS rendering is still unfinished: the current diagnostic owns
+and stops the engine in one bounded session. A persistent driver, actual
+buffer/fence/IOSurface APIs and a rendered-pixel result are the next gates.
+Historical observations below retain their original build-specific scope.
+
 # Adreno735 bring-up
 
 The current iOS session uses CPU rendering. GPU work starts with the measured
