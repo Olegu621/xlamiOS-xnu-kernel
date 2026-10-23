@@ -1,0 +1,228 @@
+--- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:45:16.713400285 +0300
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:45:16.716400336 +0300
+@@ -1025,6 +1025,8 @@
+ #define PGPU_BRANCH_SMMU 0x7000u
+ #define PGPU_RCG_SOURCE_MASK 0x371fu
+ 
++typedef void (*pgpu_gmu_observe_fn)(void *);
++
+ struct pgpu_gmu_clock_probe {
+ 	uint32_t gmu_cfg_before, gmu_cfg_after;
+ 	uint32_t hub_cfg_before, hub_cfg_after;
+@@ -1080,7 +1082,7 @@
+     const struct pgpu_power_io *gcc_io, const unsigned *sels, unsigned count,
+     uint32_t *off_hz, uint32_t *live_hz, uint32_t *hub_hz,
+     struct pgpu_gmu_clock_probe *probe, uint32_t *cx_final,
+-    uint32_t *gx_final)
++    uint32_t *gx_final, pgpu_gmu_observe_fn observe, void *observe_ctx)
+ {
+ 	static const unsigned branches[] = {
+ 		PGPU_BRANCH_CX_GMU, PGPU_BRANCH_CXO, PGPU_BRANCH_HUB_CX,
+@@ -1182,14 +1184,22 @@
+ 				}
+ 				probe->measured_hub = i + 1;
+ 			}
++			if (observe) {
++				observe(observe_ctx);
++			}
+ 			io->write(io->context, PGPU_AHB_CBCR, gate);
+ 			for (unsigned i = NB; i > 0; --i) {
+ 				io->write(io->context, branches[i - 1],
+ 				    saved[i - 1]);
+ 			}
+ 			for (unsigned i = 0; i < NB; ++i) {
+-				if (io->read(io->context, branches[i]) !=
+-				    saved[i]) {
++				/* bit31 is the read-only halt status: it clears
++				 * while an enabled branch runs, so only the
++				 * enable bit can be compared (0121 measured
++				 * exactly that on the enabled GMU branches).
++				 */
++				if ((io->read(io->context, branches[i]) ^
++				    saved[i]) & PGPU_BRANCH_ON) {
+ 					probe->branches_restored = false;
+ 				}
+ 			}
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:45:16.715400319 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:45:16.717400353 +0300
+@@ -10,8 +10,9 @@
+  * is required for all of them. Mode7 stops trusting the branch readbacks
+  * and measures the GPUCC clocks through the GCC debug counter with CX off
+  * and live; mode8 programs the GMU and hub clock sources, enables the GMU
+- * clock branches, measures the running tree and restores everything. No
+- * firmware/GPU/GMU/SMMU or core register access.
++ * clock branches, measures the running tree and restores everything; mode9
++ * adds a read-only inventory of the GMU control registers while that tree
++ * is up. No firmware load, GPU core/SMMU access or GMU writes.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -70,6 +71,70 @@
+ 	    pgpu_read(cc, 0x9010), pgpu_read(cc, 0x9014));
+ }
+ 
++/* ---- 0122: read-only GMU inventory ----
++ * GMU registers are GMU_WORD(n)=4*n from the GMU base; the live DT node
++ * qcom,gmu has reg 0x3d68000 size0x34000 (its unit address differs). The
++ * inventory observes what the boot loader left: CM3 reset/boot state,
++ * firmware init result, the always-on counter (19.2MHz crystal), the
++ * power/clock status, RPMh power state and the HFI/AO handshake. It runs
++ * inside the 0121 clock stage while the GMU tree is up and CX is live,
++ * before the branches are restored, so the AHB access is clocked. Read
++ * only: no GMU write, no firmware load, no GPU core or SMMU access.
++ */
++#define PGPU_GMU_CM3_SYSRESET 0x14000u
++#define PGPU_GMU_CM3_BOOT_CONFIG 0x14004u
++#define PGPU_GMU_CM3_FW_INIT_RESULT 0x14070u
++#define PGPU_GMU_CM3_CFG 0x140b4u
++#define PGPU_GMU_ALWAYS_ON_COUNTER_L 0x14220u
++#define PGPU_GMU_ALWAYS_ON_COUNTER_H 0x14224u
++#define PGPU_GMU_SPTPRAC_PWR_CLK_STATUS 0x14340u
++#define PGPU_GMU_RPMH_POWER_STATE 0x143b0u
++#define PGPU_GMU_HFI_CTRL_STATUS 0x14600u
++#define PGPU_GMU_HFI_VERSION_INFO 0x14604u
++#define PGPU_GMU_AO_HOST_INTERRUPT_STATUS 0x24c14u
++#define PGPU_GMU_RSCC_CONTROL_ACK 0x24c20u
++#define PGPU_GMU_AO_GPU_CX_BUSY_STATUS 0x24c30u
++#define PGPU_GMU_AHB_FENCE_STATUS 0x24c4cu
++
++struct pgpu_gmu_inventory {
++	uint32_t sysreset, boot_config, fw_init, cfg;
++	uint32_t counter_lo, counter_hi, counter_lo2, counter_hi2;
++	uint32_t sptprac, rpmh_state;
++	uint32_t hfi_ctrl, hfi_version;
++	uint32_t ao_intr, rscc_ack, ao_busy, fence;
++};
++
++struct pgpu_gmu_inventory_ctx {
++	vm_offset_t base;
++	struct pgpu_gmu_inventory *inv;
++};
++
++static void
++pgpu_gmu_inventory_read(void *context)
++{
++	struct pgpu_gmu_inventory_ctx *ctx = context;
++	struct pgpu_gmu_inventory *inv = ctx->inv;
++	vm_offset_t g = ctx->base;
++	inv->sysreset = pgpu_read(g, PGPU_GMU_CM3_SYSRESET);
++	inv->boot_config = pgpu_read(g, PGPU_GMU_CM3_BOOT_CONFIG);
++	inv->fw_init = pgpu_read(g, PGPU_GMU_CM3_FW_INIT_RESULT);
++	inv->cfg = pgpu_read(g, PGPU_GMU_CM3_CFG);
++	inv->counter_lo = pgpu_read(g, PGPU_GMU_ALWAYS_ON_COUNTER_L);
++	inv->counter_hi = pgpu_read(g, PGPU_GMU_ALWAYS_ON_COUNTER_H);
++	delay(1000);
++	inv->counter_lo2 = pgpu_read(g, PGPU_GMU_ALWAYS_ON_COUNTER_L);
++	inv->counter_hi2 = pgpu_read(g, PGPU_GMU_ALWAYS_ON_COUNTER_H);
++	inv->sptprac = pgpu_read(g, PGPU_GMU_SPTPRAC_PWR_CLK_STATUS);
++	inv->rpmh_state = pgpu_read(g, PGPU_GMU_RPMH_POWER_STATE);
++	inv->hfi_ctrl = pgpu_read(g, PGPU_GMU_HFI_CTRL_STATUS);
++	inv->hfi_version = pgpu_read(g, PGPU_GMU_HFI_VERSION_INFO);
++	inv->ao_intr = pgpu_read(g, PGPU_GMU_AO_HOST_INTERRUPT_STATUS);
++	inv->rscc_ack = pgpu_read(g, PGPU_GMU_RSCC_CONTROL_ACK);
++	inv->ao_busy = pgpu_read(g, PGPU_GMU_AO_GPU_CX_BUSY_STATUS);
++	inv->fence = pgpu_read(g, PGPU_GMU_AHB_FENCE_STATUS);
++}
++
++
+ void
+ sweet_peridot_gpu_probe(void)
+ {
+@@ -77,7 +142,7 @@
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+-	    mode != 6 && mode != 7 && mode != 8) || attempted) {
++	    mode != 6 && mode != 7 && mode != 8 && mode != 9) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -367,7 +432,8 @@
+ 		struct pgpu_gmu_clock_probe probe = { 0 };
+ 		uint32_t cx_out = 0, gx_out = 0;
+ 		enum pgpu_clock_result result = pgpu_cx_gmu_clock_stage(&io,
+-		    &gcc_io, sels, N, off, live, hub, &probe, &cx_out, &gx_out);
++		    &gcc_io, sels, N, off, live, hub, &probe, &cx_out, &gx_out,
++		    0, 0);
+ 		for (unsigned i = 0; i < N; ++i) {
+ 			printf("PERIDOT GPU: MEAS %s sel=%#x off=%u live=%u programmed=%u\n",
+ 			    clock_names[i], sels[i], off[i], live[i], hub[i]);
+@@ -402,5 +468,78 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU clock stage %s\n", names[result]);
+ 	}
++	if (mode == 9) {
++		uint32_t reset = 0;
++		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
++		if (reset < 30 || reset > 3600) {
++			printf("PERIDOT GPU: GMU inventory refused: diagnostic reset timer required\n");
++			return;
++		}
++		static const unsigned sels[] = {
++			0x16, 0x1d, 0x1e, 0x2d, 0x1f, 0x21, 0x0b, 0x0e
++		};
++		static const char *const clock_names[] = {
++			"ahb", "cx-gmu", "cxo", "hub-aon", "hub-cx-int",
++			"memnoc-gfx", "cxo-aon", "gx-gfx3d"
++		};
++		enum { N = sizeof(sels) / sizeof(sels[0]) };
++		uint32_t off[N] = { 0 }, live[N] = { 0 }, hub[N] = { 0 };
++		vm_offset_t gmu = ml_io_map(0x3d68000, 0x34000);
++		if (!gmu) {
++			printf("PERIDOT GPU: GMU map failed\n");
++			return;
++		}
++		printf("PERIDOT GPU: GMU inventory: read-only CM3/HFI/AO registers at 0x3d68000 while the GMU tree runs\n");
++		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		struct pgpu_power_io gcc_io = { (void *)gcc, pgpu_power_read, pgpu_power_write, delay };
++		struct pgpu_gmu_clock_probe probe = { 0 };
++		struct pgpu_gmu_inventory inv = { 0 };
++		struct pgpu_gmu_inventory_ctx ictx = { gmu, &inv };
++		uint32_t cx_out = 0, gx_out = 0;
++		enum pgpu_clock_result result = pgpu_cx_gmu_clock_stage(&io,
++		    &gcc_io, sels, N, off, live, hub, &probe, &cx_out, &gx_out,
++		    pgpu_gmu_inventory_read, &ictx);
++		for (unsigned i = 0; i < N; ++i) {
++			printf("PERIDOT GPU: MEAS %s sel=%#x off=%u live=%u programmed=%u\n",
++			    clock_names[i], sels[i], off[i], live[i], hub[i]);
++		}
++		printf("PERIDOT GPU: GMU inv CM3 sysreset=%#x boot=%#x fwinit=%#x cfg=%#x\n",
++		    inv.sysreset, inv.boot_config, inv.fw_init, inv.cfg);
++		printf("PERIDOT GPU: GMU inv counter=%#x:%#x then=%#x:%#x sptprac=%#x rpmh=%#x\n",
++		    inv.counter_hi, inv.counter_lo, inv.counter_hi2,
++		    inv.counter_lo2, inv.sptprac, inv.rpmh_state);
++		printf("PERIDOT GPU: GMU inv hfi-ctrl=%#x hfi-ver=%#x ao-intr=%#x rscc-ack=%#x ao-busy=%#x fence=%#x\n",
++		    inv.hfi_ctrl, inv.hfi_version, inv.ao_intr, inv.rscc_ack,
++		    inv.ao_busy, inv.fence);
++		printf("PERIDOT GPU: GMU clock probe off=%u/%u live=%u/%u programmed=%u/%u counter=%u powered=%u cx=%u branches=%u rcg=%u; gmuCFG=%#x->%#x hubCFG=%#x->%#x CX=%#x hw=%#x GX=%#x\n",
++		    probe.measured_off, (unsigned)N, probe.measured_live,
++		    (unsigned)N, probe.measured_hub, (unsigned)N,
++		    probe.counter_ok, probe.cx_powered, probe.cx_restored,
++		    probe.branches_restored, probe.rcg_restored,
++		    probe.gmu_cfg_before, probe.gmu_cfg_after,
++		    probe.hub_cfg_before, probe.hub_cfg_after, cx_out,
++		    pgpu_read(cc, PGPU_CX_HW), gx_out);
++		static const char *const names[] = {
++			"REFUSED live/unknown domain, bad RCG state or empty clock list",
++			"PASS (unused in this stage)",
++			"FAIL CX power-on timeout; collapse restored",
++			"FAIL AHB gate timeout (unused in this stage)",
++			"FAIL AHB gate restore timeout (unused in this stage)",
++			"FAIL CX collapse timeout",
++			"FAIL ownership changed; leave for diagnostic reset",
++			"FAIL hub_clk_src update timeout; originals restored as far as possible",
++			"FAIL hub_clk_src restore timeout",
++			"FAIL branch restore timeout",
++			"FAIL branch none latched (unused in this stage)",
++			"FAIL branch partial latch (unused in this stage)",
++			"FAIL GX power-on timeout (unused in this stage)",
++			"FAIL GX collapse timeout (unused in this stage)",
++			"FAIL counter timeout or unreadable debug register; no clock programming",
++			"PASS GMU tree programmed, inventory read and everything restored",
++			"FAIL gmu_clk_src update timeout; originals restored as far as possible",
++			"FAIL gmu_clk_src restore timeout"
++		};
++		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
++	}
+ }
+ #endif
