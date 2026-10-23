@@ -4,6 +4,39 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0145 context/EAGL PASS; planar format and client-image ABI block frames
+
+- Mesa CI40016485950/8dd0f59 SUCCESS. Dylib15234816B, SHA
+  15e30cff196cccf8370bfe75386e114557f394a559bc871b9bd4694f2e3721ae.
+  Kernel reused0144; temporary0145 imageSHA
+  1fbe2ab5e8954d49167b5221848a6389d6d2e7139cce79bafbef648cb9bbd4c7.
+- Actual FD735 GLES3 context now creates, EAGL/GLI methods run, CA issues
+  shaders/draws. No runtime GPU batches yet: first display destination is
+  b3a8/two planes, unsupported by frontend; draw returns0x506.
+  User did NOT look at0145 screen. No visible/accelerated-frame success.
+- New crash symbolized using EXACT20H392 local HFS image/shared cache:
+  platform_memmove <- IOSurfaceClientGetBulkAttachments <- CA iosurface EDR.
+  Root cause: selector6 returned generic success with a zero lock result.
+  That lets IOSurfaceWrapClientImage construct an invalid client/state map.
+- Local Windows HFS catalog/hard-link reader extracted the actual cache;
+  ipsw3.1.739 parsed it. No laptop required; Apple files stay private in work/.
+  Actual IOSurface getters prove planar row field is0x10, not0x08, relative
+  to each0x80-byte plane record. Base/header/offset/size/element fields agree.
+-0146 implements selector6 from exact32-byte input/0xa68-byte output ABI:
+  validated originating-task image range, real prepared/wired descriptor,
+  readonly fallback, counted wiring budget, cached aliases, real mappings,
+  lifecycle completion. Selector7 explicitly refuses unsupported wrapping.
+  Corrects planar row field, supports directional descriptor preparation in
+  PeridotGPU, and logs first8 actual GPU-written runtime completion fences.
+- No b3a8 reinterpretation or fabricated rendering success. This is unpacked
+  RGB10 plus alpha8, NOT compressed BGRA; a prior commentary calling it
+  compressed was corrected. Eight/ten-bit destination negotiation still open.
+-0145 full180s recovery consoleSHA
+  748b3202658c3af7984a77813d2a179591b8e60fc6dcf8b431f3899b135a55b8.
+ 0146 patch applies to exact source baseline. First local check failed due
+  CRLF patch versus LF sandbox; normalized LF check succeeds. CI pending.
+
+
 ### 0144 actual driver loading PASS; compositor context crashes, UI NOT reached
 
 - Kernel CI40013951646/3930358 SUCCESS, temporary imageSHA

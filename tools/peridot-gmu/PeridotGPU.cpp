@@ -98,7 +98,7 @@ bool PeridotGPUUserClient::releaseBo(pg_client_bo *entry)
     }
     OSSafeReleaseNULL(entry->mapping);
     if (entry->surface) {
-        entry->memory->complete(kIODirectionInOut);
+        entry->memory->complete();
         entry->surface->release();
     } else fBytes-=entry->bytes;
     entry->memory->release();
@@ -181,7 +181,7 @@ IOReturn PeridotGPUUserClient::importSurface(uint32_t id,uint64_t *out)
     uint32_t handle=0,count=0;uint64_t *pages=NULL;
     pg_client_bo *entry=vacant(&handle);
     IOMemoryDescriptor *memory=surface->memory;
-    if (!entry || memory->prepare(kIODirectionInOut)!=kIOReturnSuccess) {
+    if (!entry || memory->prepare()!=kIOReturnSuccess) {
         surface->release();return entry ? kIOReturnVMError : kIOReturnNoResources;
     }
     if (!physicalPages(memory,&pages,&count)) {

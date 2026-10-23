@@ -1,0 +1,177 @@
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -39,6 +39,7 @@
+ 	IOOptionBits              mapCache;     /* cache mode for user mappings */
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
++	bool clientMemory, readOnly;
+ 
+ 	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -80,10 +80,11 @@
+ void
+ SweetSurface::free()
+ {
+-	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
++	if (clientMemory || OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
+ 	OSSafeReleaseNULL(kernelMap);
++	if (clientMemory && memory != NULL) memory->complete();
+ 	OSSafeReleaseNULL(memory);
+ 	OSSafeReleaseNULL(state);
+ 	OSObject::free();
+@@ -98,7 +99,7 @@
+ 	}
+ 	IOLockLock(sweet_surface_lock);
+ 	if (kernelMap == NULL && memory != NULL) {
+-		kernelMap = memory->map(kIOMapWriteCombineCache);
++		kernelMap = memory->map(mapCache | (readOnly ? kIOMapReadOnly : 0));
+ 	}
+ 	IOLockUnlock(sweet_surface_lock);
+ 	return kernelMap != NULL ? (uintptr_t)kernelMap->getVirtualAddress() : 0;
+@@ -204,6 +205,8 @@
+ 		OSSafeReleaseNULL(s);
+ 		return NULL;
+ 	}
++	s->clientMemory = false;
++	s->readOnly = false;
+ 	s->state = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+ 	    kIODirectionInOut | kIOMemoryKernelUserShared, page_size, page_size);
+ 	if (s->state == NULL) {
+@@ -410,6 +413,7 @@
+ 	IOReturn addRef(SweetSurface *s, SweetSurfaceRef **refOut, bool *existing);
+ 	IOReturn returnSurface(SweetSurface *s, IOExternalMethodArguments *args);
+ 	IOReturn create(IOExternalMethodArguments *args);
++	IOReturn wrapClientImage(IOExternalMethodArguments *args);
+ 
+ public:
+ 	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
+@@ -527,7 +531,8 @@
+ 	s->retain();
+ 	ref->surface = s;
+ 	ref->count = 1;
+-	ref->data = s->memory->createMappingInTask(fTask, 0, kIOMapAnywhere | s->mapCache);
++	ref->data = s->memory->createMappingInTask(fTask, 0, kIOMapAnywhere | s->mapCache |
++	    (s->readOnly ? kIOMapReadOnly : 0));
+ 	ref->state = s->state->createMappingInTask(fTask, 0, kIOMapAnywhere | kIOMapReadOnly);
+ 	if (ref->data == NULL || ref->state == NULL) {
+ 		ref->release();
+@@ -590,7 +595,9 @@
+ 		const struct sweet_surface_plane *pl = &s->planes[i];
+ 		put32(p, 0x00, pl->width);
+ 		put32(p, 0x04, pl->height);
+-		put32(p, 0x08, pl->bytesPerRow);
++		/* iOS16.7 IOSurfaceClientGetBytesPerRowOfPlane reads +0xe0:
++		 * client header0x68 + plane0x68 + field0x10. */
++		put32(p, 0x10, pl->bytesPerRow);
+ 		put32(p, 0x0c, pl->offset);
+ 		put32(p, 0x14, pl->size);
+ 		memcpy(p + 0x18, &pl->bytesPerElement, 2);
+@@ -721,6 +728,59 @@
+ 	return ret;
+ }
+ 
++/* iOS20H392 IOSurfaceClientWrapClientImage sends selector6, a32-byte
++ * image range, and expects a real lock result. Never answer with zero maps. */
++IOReturn
++IOSurfaceRootUserClient::wrapClientImage(IOExternalMethodArguments *args)
++{
++	if (args->scalarInputCount || args->structureInputDescriptor ||
++	    !args->structureInput || args->structureInputSize != 32)
++		return kIOReturnBadArgument;
++	uint64_t address;
++	uint32_t image[6];
++	memcpy(&address, args->structureInput, 8);
++	memcpy(image, (const uint8_t *)args->structureInput + 8, sizeof(image));
++	uint32_t width=image[0], height=image[1], format=image[2], bpe=image[3], row=image[4];
++	uint64_t bytes=(uint64_t)row*height, start=address&~(uint64_t)PAGE_MASK;
++	uint64_t offset=address-start;
++	if (!address || !width || !height || width>SWEET_SURFACE_MAX_DIM ||
++	    height>SWEET_SURFACE_MAX_DIM || !bpe || bpe>16 ||
++	    (uint64_t)width*bpe>row || !bytes || bytes>SWEET_SURFACE_MAX_ALLOC ||
++	    address>UINT64_MAX-bytes || offset+bytes>SWEET_SURFACE_MAX_ALLOC)
++		return kIOReturnBadArgument;
++	uint64_t length=(offset+bytes+PAGE_MASK)&~(uint64_t)PAGE_MASK;
++	SweetSurface *s=sweet_surface_alloc();
++	if (!s) return kIOReturnNoMemory;
++	if ((uint64_t)OSAddAtomic64(length,(volatile SInt64 *)&sweet_surface_wired)+length>
++	    SWEET_SURFACE_WIRED_MAX) {
++		OSAddAtomic64(-(SInt64)length,(volatile SInt64 *)&sweet_surface_wired);
++		s->release();return kIOReturnNoMemory;
++	}
++	IOMemoryDescriptor *memory=IOMemoryDescriptor::withAddressRange(start,length,kIODirectionInOut,fTask);
++	if (memory && memory->prepare()!=kIOReturnSuccess) OSSafeReleaseNULL(memory);
++	if (!memory) {
++		memory=IOMemoryDescriptor::withAddressRange(start,length,kIODirectionOut,fTask);
++		if (memory && memory->prepare()!=kIOReturnSuccess) OSSafeReleaseNULL(memory);
++		s->readOnly=memory!=NULL;
++	}
++	if (!memory) {
++		OSAddAtomic64(-(SInt64)length,(volatile SInt64 *)&sweet_surface_wired);
++		s->release();return kIOReturnVMError;
++	}
++	s->memory=memory;s->clientMemory=true;s->mapCache=kIOMapDefaultCache;
++	s->width=width;s->height=height;s->pixelFormat=format;
++	s->bytesPerRow=row;s->bytesPerElement=(uint16_t)bpe;
++	s->elementWidth=s->elementHeight=1;s->planeCount=0;
++	s->offset=(uint32_t)offset;s->allocSize=(uint32_t)length;
++	if (!sweet_surface_publish(s)) {s->release();return kIOReturnNoResources;}
++	IOReturn result=returnSurface(s,args);
++	static unsigned logged;
++	if (logged++<16 || result!=kIOReturnSuccess)
++		IOLog("PERIDOT SURF: client image id=%u %ux%u format=%#x row=%u flags=%#x readonly=%u result=%#x\n",
++		    s->id,width,height,format,row,image[5],s->readOnly,result);
++	s->release();return result;
++}
++
+ IOReturn
+ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+     __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
+@@ -739,6 +799,10 @@
+ 	}
+ 	case kSweetSurfaceCreate:
+ 		return create(args);
++	case 6:
++		return wrapClientImage(args);
++	case 7:
++		return kIOReturnUnsupported;
+ 	case kSweetSurfaceLookup: {
+ 		SweetSurface *s = sweet_surface_copy((uint32_t)arg0);
+ 		IOReturn ret = kIOReturnNotFound;
+--- a/iokit/Kernel/arm/PeridotGPU.cpp
++++ b/iokit/Kernel/arm/PeridotGPU.cpp
+@@ -98,7 +98,7 @@
+     }
+     OSSafeReleaseNULL(entry->mapping);
+     if (entry->surface) {
+-        entry->memory->complete(kIODirectionInOut);
++        entry->memory->complete();
+         entry->surface->release();
+     } else fBytes-=entry->bytes;
+     entry->memory->release();
+@@ -181,7 +181,7 @@
+     uint32_t handle=0,count=0;uint64_t *pages=NULL;
+     pg_client_bo *entry=vacant(&handle);
+     IOMemoryDescriptor *memory=surface->memory;
+-    if (!entry || memory->prepare(kIODirectionInOut)!=kIOReturnSuccess) {
++    if (!entry || memory->prepare()!=kIOReturnSuccess) {
+         surface->release();return entry ? kIOReturnVMError : kIOReturnNoResources;
+     }
+     if (!physicalPages(memory,&pages,&count)) {
+--- a/bsd/dev/peridot_gpu_runtime.c
++++ b/bsd/dev/peridot_gpu_runtime.c
+@@ -169,7 +169,10 @@
+         delay(10);
+     }
+     ok=ok && fence[4]==seq && pgdr_observe();
+-    if (ok) {pgdr.completed=seq;*sequence=seq;}
++    if (ok) {
++        pgdr.completed=seq;*sequence=seq;
++        if (seq<=8) printf("PERIDOT GPU: userspace batch=%u IBs=%u GPU-fence=%u completed=1\n",seq,count,fence[4]);
++    }
+     else pgdr_poison("command/fence completion");
+     IOLockUnlock(pgdr.lock);
+     return ok ? 0 : EIO;

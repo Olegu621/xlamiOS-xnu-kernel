@@ -169,7 +169,10 @@ int peridot_gpu_submit(const struct peridot_gpu_ib *ibs, uint32_t count, uint32_
         delay(10);
     }
     ok=ok && fence[4]==seq && pgdr_observe();
-    if (ok) {pgdr.completed=seq;*sequence=seq;}
+    if (ok) {
+        pgdr.completed=seq;*sequence=seq;
+        if (seq<=8) printf("PERIDOT GPU: userspace batch=%u IBs=%u GPU-fence=%u completed=1\n",seq,count,fence[4]);
+    }
     else pgdr_poison("command/fence completion");
     IOLockUnlock(pgdr.lock);
     return ok ? 0 : EIO;
