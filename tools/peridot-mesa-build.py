@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Cross-build the candidate FD735/GLES frontend on a Mac GitHub runner.
+
+Does not install anything on a device. Downloaded third-party sources and SDK
+headers stay in the build directory; only the library and provenance are outputs.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import tarfile
+import urllib.request
+
+MESA = '25.0.7'
+MESA_SHA = '592272df3cf01e85e7db300c449df5061092574d099da275d19e97ef0510f8a6'
+FRONTEND = 'd7a74344828c87d37c64f87f237525cb65b7e5f5'
+FILES = ['sweetgl.c', 'sweetgl.h', 'sweet_drm.c', 'sweet_drm.h', 'eagl.c',
+         'eagl.h', 'layerdump.c', 'gen-dispatch.py', 'ios-dispatch.txt', 'include/xf86drm.h']
+
+
+def run(args, cwd=None, capture=False):
+    print('+', shlex.join(map(str, args)), flush=True)
+    return subprocess.run(list(map(str, args)), cwd=cwd, check=True,
+                          text=True, capture_output=capture)
+
+
+def fetch(url, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(url, timeout=120) as response:
+        destination.write_bytes(response.read())
+    return hashlib.sha256(destination.read_bytes()).hexdigest()
+
+
+def edit(path, old, new):
+    text = path.read_text()
+    if text.count(old) != 1:
+        raise RuntimeError(f'exact source anchor changed: {path}: {old!r}')
+    path.write_text(text.replace(old, new))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('work', type=Path)
+    ap.add_argument('output', type=Path)
+    a = ap.parse_args()
+    work, output = a.work.resolve(), a.output.resolve()
+    work.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=True)
+    archive = work / f'mesa-{MESA}.tar.xz'
+    digest = fetch(f'https://archive.mesa3d.org/mesa-{MESA}.tar.xz', archive)
+    if digest != MESA_SHA:
+        raise RuntimeError('Mesa release archive SHA256 mismatch')
+    with tarfile.open(archive) as source:
+        for member in source.getmembers():
+            if not member.name.startswith(f'mesa-{MESA}/'):
+                raise RuntimeError('unexpected Mesa archive prefix')
+        source.extractall(work, filter='data')
+    mesa, build, front = work / f'mesa-{MESA}', work / 'build', work / 'frontend'
+    provenance = {'mesa_version': MESA, 'mesa_archive_sha256': digest,
+                  'frontend_commit': FRONTEND, 'frontend_sources': {},
+                  'device_deployment': False, 'hardware_rendering_verified': False}
+    for name in FILES:
+        url = f'https://raw.githubusercontent.com/joranv1/ios-sailfish/{FRONTEND}/tools/sweetgl/{name}'
+        provenance['frontend_sources'][name] = fetch(url, front / name)
+    # Use the actual peridot identity. No A530 import-pitch workaround is added.
+    edit(front / 'sweet_drm.c', 'p->value = 530;', 'p->value = 735;')
+    # Fixed shared-cache addresses belong to a different restore. Build the
+    # generic EAGL path with these optional hooks disabled pending our ABI audit.
+    edit(front / 'eagl.c', '\tsgl_install_texfns();',
+         '\tif (getenv("PERIDOT_VERIFIED_CACHE_HOOKS")) sgl_install_texfns();')
+    edit(front / 'eagl.c', '\tif (trace_left > 0) {\n\t\tsgl_install_fmt_hook();',
+         '\tif (trace_left > 0 && getenv("PERIDOT_VERIFIED_CACHE_HOOKS")) {\n\t\tsgl_install_fmt_hook();')
+    edit(mesa / 'src/freedreno/meson.build', 'if system_has_kms_drm\n',
+         "if system_has_kms_drm or host_machine.system() == 'darwin'\n")
+    edit(mesa / 'src/freedreno/drm/freedreno_bo.c', '#include "freedreno_priv.h"\n',
+         '#include "freedreno_priv.h"\n'
+         '#ifdef __APPLE__\nvoid *sweet_drm_bo_map(int fd, uint64_t offset);\n'
+         '#undef os_mmap\n#define os_mmap(addr, length, prot, flags, fd, offset) sweet_drm_bo_map(fd, offset)\n'
+         '#define os_munmap(addr, length) 0\n#endif\n')
+    sdk = run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], capture=True).stdout.strip()
+    macsdk = run(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], capture=True).stdout.strip()
+    clang = run(['xcrun', '--find', 'clang'], capture=True).stdout.strip()
+    clangpp = run(['xcrun', '--find', 'clang++'], capture=True).stdout.strip()
+    ar = run(['xcrun', '--find', 'ar'], capture=True).stdout.strip()
+    strip = run(['xcrun', '--find', 'strip'], capture=True).stdout.strip()
+    # iOS ships the IOKit linker interface, but some SDK releases omit its
+    # public C declarations. Reuse only IOKit's headers, without exposing the
+    # Mac frameworks directory to the iOS CoreFoundation/CoreGraphics search.
+    iokit = Path(macsdk) / 'System/Library/Frameworks/IOKit.framework/Headers'
+    if not (Path(sdk) / 'System/Library/Frameworks/IOKit.framework/Headers/IOKitLib.h').exists():
+        (front / 'include/IOKit').symlink_to(iokit, target_is_directory=True)
+    common = ['-arch', 'arm64', '-isysroot', sdk, '-miphoneos-version-min=16.0']
+    cross = work / 'ios-cross.txt'
+    cross.write_text('[binaries]\n' + '\n'.join(
+        f'{key} = {value!r}' for key, value in {
+            'c': [clang] + common, 'cpp': [clangpp] + common,
+            'objc': [clang] + common, 'ar': ar, 'strip': strip, 'pkg-config': 'false'}.items()) +
+        '\n[built-in options]\nc_args = ' + repr(['-I' + str(front / 'include')]) +
+        '\ncpp_args = ' + repr(['-I' + str(front / 'include')]) +
+        "\n[host_machine]\nsystem = 'darwin'\nsubsystem = 'ios'\ncpu_family = 'aarch64'\ncpu = 'arm64'\nendian = 'little'\n")
+    options_file = mesa / 'meson_options.txt'
+    names = set(re.findall(r"option\(\s*['\"]([^'\"]+)", options_file.read_text()))
+    options = {'platforms': '', 'egl': 'disabled', 'glx': 'disabled', 'gbm': 'disabled',
+               'gallium-drivers': 'freedreno', 'vulkan-drivers': '', 'freedreno-kmds': 'msm',
+               'llvm': 'disabled', 'gles1': 'disabled', 'gles2': 'enabled', 'opengl': 'true',
+               'zstd': 'disabled', 'zlib': 'disabled', 'expat': 'disabled', 'xmlconfig': 'disabled',
+               'valgrind': 'disabled', 'libunwind': 'disabled', 'lmsensors': 'disabled',
+               'build-tests': 'false', 'shader-cache': 'disabled', 'perfetto': 'false',
+               'gallium-va': 'disabled', 'gallium-rusticl': 'false', 'tools': '',
+               'html-docs': 'disabled', 'display-info': 'disabled', 'teflon': 'false'}
+    required = {'gallium-drivers', 'vulkan-drivers', 'build-tests', 'freedreno-kmds'}
+    if not required <= names:
+        raise RuntimeError('Mesa build-option contract changed')
+    run(['meson', 'setup', build, mesa, '--cross-file', cross, '--buildtype=release',
+         '-Db_ndebug=true', '-Ddefault_library=static'] +
+        [f'-D{k}={v}' for k, v in options.items() if k in names])
+    # Build the needed archives directly, without a system GLES shared target.
+    libs = ['src/mesa/libmesa.a', 'src/gallium/auxiliary/libgallium.a',
+            'src/gallium/drivers/freedreno/libfreedreno.a',
+            'src/gallium/winsys/freedreno/drm/libfreedrenowinsys.a',
+            'src/freedreno/drm/libfreedreno_drm.a', 'src/freedreno/ir3/libfreedreno_ir3.a',
+            'src/freedreno/ir2/libfreedreno_ir2.a', 'src/freedreno/fdl/libfreedreno_layout.a',
+            'src/freedreno/common/libfreedreno_common.a', 'src/freedreno/isa/libir3encode.a',
+            'src/freedreno/isa/libir3decode.a', 'src/compiler/isaspec/libisaspec.a',
+            'src/freedreno/perfcntrs/libfreedreno_perfcntrs.a',
+            'src/compiler/glsl/libglsl.a', 'src/compiler/glsl/glcpp/libglcpp.a',
+            'src/compiler/nir/libnir.a', 'src/compiler/spirv/libvtn.a', 'src/compiler/libcompiler.a',
+            'src/mapi/glapi/libglapi_bridge.a', 'src/mapi/shared-glapi/libglapi.a',
+            'src/util/libxmlconfig.a', 'src/util/libmesa_util.a',
+            'src/util/libmesa_util_simd.a', 'src/util/blake3/libblake3.a',
+            'src/c11/impl/libmesa_util_c11.a']
+    # meson target metadata supplies the actual target paths for this pinned
+    # release, including optional utility archives that changed names later.
+    targets = json.loads(run(['meson', 'introspect', build, '--targets'], capture=True).stdout)
+    actual = {Path(f).name: Path(f) for t in targets for f in t.get('filename', []) if f.endswith('.a')}
+    selected = []
+    optional = {'libmesa_util_simd.a', 'libblake3.a'}
+    for lib in libs:
+        name = Path(lib).name
+        if name not in actual:
+            if name in optional:
+                continue
+            raise RuntimeError(f'Mesa static target missing: {name}')
+        selected.append(actual[name])
+    run(['ninja', '-C', build] + [str(p.relative_to(build)) for p in selected])
+    commands = json.loads((build / 'compile_commands.json').read_text())
+    tracker = next(c for c in commands if c['file'].endswith('state_tracker/st_manager.c'))
+    definitions = [arg for arg in shlex.split(tracker['command']) if arg.startswith('-D')]
+    nm = work / 'bridge.nm'
+    nm.write_text(run(['nm', '-g', actual['libglapi_bridge.a']], capture=True).stdout)
+    run(['python3', front / 'gen-dispatch.py', front / 'ios-dispatch.txt',
+         mesa / 'include', nm, work / 'dispatch.c'])
+    includes = [front / 'include', mesa / 'include', mesa / 'src', mesa / 'src/mesa', mesa / 'src/mapi',
+                mesa / 'src/gallium/include', mesa / 'src/gallium/auxiliary',
+                mesa / 'src/gallium/drivers', mesa / 'src/gallium/winsys',
+                build / 'src', build / 'src/mesa', build / 'src/mapi', front]
+    objects = []
+    for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch']:
+        source = (work if name == 'dispatch' else front) / f'{name}.c'
+        obj = work / f'{name}.o'
+        run([clang] + common + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
+            ['-I' + str(p) for p in includes] + ['-c', source, '-o', obj])
+        objects.append(obj)
+    exports = work / 'exports.txt'
+    exports.write_text('_sweetgl_init\n_sweetgl_create\n_sweetgl_make_current\n_sweetgl_destroy\n')
+    library = output / 'peridot-sweetgl.dylib'
+    run([clangpp] + common + ['-dynamiclib', '-dead_strip', '-install_name', '/usr/lib/peridot-sweetgl.dylib',
+        '-exported_symbols_list', exports, '-o', library] + objects + selected +
+        ['-framework', 'IOKit', '-framework', 'CoreFoundation', '-framework', 'IOSurface',
+         '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
+    run(['codesign', '-f', '-s', '-', library])
+    provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
+    provenance['compiler'] = run([clang, '--version'], capture=True).stdout
+    provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout
+    (output / 'build.json').write_text(json.dumps(provenance, indent=2) + '\n')
+    print('Built candidate library; no device installation or hardware-rendering claim.', flush=True)
+
+
+if __name__ == '__main__':
+    main()

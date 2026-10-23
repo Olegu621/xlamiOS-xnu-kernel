@@ -1,0 +1,36 @@
+name: peridot-mesa
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - tools/peridot-mesa-build.py
+      - .github/workflows/peridot-mesa.yml
+concurrency:
+  group: peridot-mesa-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build tools
+        run: python3 -m pip install meson ninja mako pyyaml packaging
+      - name: Cross-build FD735 GLES frontend
+        run: python3 tools/peridot-mesa-build.py work/peridot-mesa out/peridot-mesa
+      - name: Preserve diagnostics
+        if: always()
+        run: |
+          mkdir -p out/diagnostics
+          cp work/peridot-mesa/build/meson-logs/meson-log.txt out/diagnostics/ 2>/dev/null || true
+          cp work/peridot-mesa/build/compile_commands.json out/diagnostics/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peridot-mesa
+          path: out/
+          retention-days: 7

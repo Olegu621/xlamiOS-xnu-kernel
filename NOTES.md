@@ -5,6 +5,20 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### Candidate GLES userspace build prepared (not installed)
+
+- New independent peridot-mesa workflow cross-builds official Mesa25.0.7
+  (archiveSHA592272df3cf01e85e7db300c449df5061092574d099da275d19e97ef0510f8a6)
+  and ios-sailfish sweetgl frontend pinned to d7a74344828c. Actual source
+  inspection confirms Gallium generation7 dispatch and A7XX emit paths.
+- Uses Xcode's iPhoneOS SDK/minimumiOS16, replaces A530 GPU ID with735,
+  bridges Mesa BO mapping to IOKit. Fixed addresses belonging to upstream's
+  different shared cache are disabled pending our own exact ABI audit.
+- Builds only; does not install the library or claim hardware rendering.
+  The real IOKit BO/IOSurface/submission/fence service remains required.
+- Initial kernel0140 CI40006174225 succeeded. Corrected0141 CI40007360442
+  builds508ad3f. No0140/0141 hardware boot performed yet.
+
 ### 0141 source correction before hardware deployment
 
 - CI40006174225 SUCCESS/6828761 compiles the complete0140 GPU phase.
