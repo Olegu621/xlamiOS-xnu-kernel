@@ -78,6 +78,18 @@ def main():
     # This build selects only MSM, with calls provided by our IOKit facade.
     # The virtual DRM library is neither available nor used on Darwin.
     edit(mesa / 'src/freedreno/drm/meson.build', 'link_with : [libvdrm],', 'link_with : [],')
+    edit(mesa / 'src/freedreno/ir3/ir3_disk_cache.c',
+         '   const struct build_id_note *note =\n'
+         '      build_id_find_nhdr_for_addr(ir3_disk_cache_init);\n'
+         '   assert(note && build_id_length(note) == 20); /* sha1 */\n\n'
+         '   const uint8_t *id_sha1 = build_id_data(note);\n'
+         '   assert(id_sha1);\n',
+         '   struct mesa_sha1 build_id;\n'
+         '   uint8_t id_sha1[20];\n'
+         '   _mesa_sha1_init(&build_id);\n'
+         '   if (!disk_cache_get_function_identifier(ir3_disk_cache_init, &build_id))\n'
+         '      return;\n'
+         '   _mesa_sha1_final(&build_id, id_sha1);\n')
     edit(mesa / 'src/freedreno/drm/freedreno_bo.c', '#include "freedreno_priv.h"\n',
          '#include "freedreno_priv.h"\n'
          '#ifdef __APPLE__\nvoid *sweet_drm_bo_map(int fd, uint64_t offset);\n'
