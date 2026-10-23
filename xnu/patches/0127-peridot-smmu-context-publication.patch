@@ -1,0 +1,207 @@
+--- a/bsd/dev/sweet_gpu_peridot.c
++++ b/bsd/dev/sweet_gpu_peridot.c
+@@ -33,8 +33,9 @@
+ /* Build and walk inactive native4K tables over owned physical allocations. */
+ #include <IOKit/IOLib.h>
+ #include "peridot_smmu4k.c"
++#include "peridot_smmu4k_context.c"
+ static void
+-pgpu_prepare_tables(void)
++pgpu_prepare_tables(uint32_t id0, uint32_t id2)
+ {
+     IOPhysicalAddress pool_pa = 0, data_pa = 0;
+     const vm_size_t bytes = 0x4000;
+@@ -66,6 +67,25 @@
+             table = desc & UINT64_C(0x0000fffffffff000);
+             if (level == 3 && table != data_pa + page * 4096) valid = false;
+         }
++    }
++    if (valid && id0 && id2) {
++        ArmSmmu4KContextConfig cfg = {0};
++        ArmSmmu4KContextImage image;
++        cfg.lower = &config;
++        cfg.lower_tables = &result;
++        cfg.id0 = id0;
++        cfg.id2 = id2;
++        cfg.asid = 1;
++        cfg.coherent_walk = 0;
++        ArmSmmu4KStatus encoded = ArmSmmu4KEncodeContext(&cfg, &image);
++        if (encoded == ArmSmmu4KSuccess) {
++            flush_dcache64((addr64_t)data_pa, bytes, TRUE);
++            flush_dcache64((addr64_t)pool_pa, bytes, TRUE);
++            __asm__ volatile("dsb sy" ::: "memory");
++        }
++        printf("PERIDOT GPU: native4K context encode=%u published=%u CBAR=%#x CBA2R=%#x TCR=%#x TCR2=%#x SCTLR=%#x; inactive\n",
++            (unsigned)encoded, encoded == ArmSmmu4KSuccess,
++            image.cbar, image.cba2r, image.tcr, image.tcr2, image.sctlr);
+     }
+     printf("PERIDOT GPU: native4K inactive tables status=%u walk=%u pages=%lu leaves=%lu; no SMMU installation\n",
+         (unsigned)status, valid, (unsigned long)result.table_pages,
+@@ -390,6 +410,9 @@
+ 
+ 	pgpu_gmu_inventory_read(&ctx->gmu);
+ 	pgpu_smmu_inventory_read(&ctx->smmu);
++	uint32_t mode = 0;
++	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
++	if (mode == 13) pgpu_prepare_tables(ctx->smmu.inv->id[0], ctx->smmu.inv->id[2]);
+ }
+ 
+ 
+@@ -401,11 +424,11 @@
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+ 	    mode != 6 && mode != 7 && mode != 8 && mode != 9 &&
+-	    mode != 10 && mode != 11 && mode != 12) || attempted) {
++	    mode != 10 && mode != 11 && mode != 12 && mode != 13) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+-	if (mode == 12) { pgpu_prepare_tables(); return; }
++	if (mode == 12) { pgpu_prepare_tables(0, 0); return; }
+ 	printf("PERIDOT GPU: read-only clock handoff; DT expects Adreno735 id=0x43030b00 gen7-11-0\n");
+ 	vm_offset_t gcc = ml_io_map(0x100000, 0x80000);
+ 	if (!gcc) {
+@@ -801,8 +824,8 @@
+ 		};
+ 		printf("PERIDOT GPU: GMU inventory stage %s\n", names[result]);
+ 	}
+-	if (mode == 10 || mode == 11) {
+-		bool diag = (mode == 11);
++	if (mode == 10 || mode == 11 || mode == 13) {
++		bool diag = (mode == 11 || mode == 13);
+ 		uint32_t reset = 0;
+ 		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
+ 		if (reset < 30 || reset > 3600) {
+--- /dev/null
++++ b/bsd/dev/ArmSmmu4KContext.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef ARM_SMMU_4K_CONTEXT_H
++#define ARM_SMMU_4K_CONTEXT_H
++#include "ArmSmmu4K.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++typedef struct {
++    /* A config/result pair from Build, BuildUpper or LivePrepare; NULL pair disables it.
++     * A live arena may have zero mapped leaves while retaining its table topology.
++     * Both enabled regions need distinct physical pools and equal OAS/MAIR.
++     * The trusted caller retains actual pool ownership and immutable results. */
++    const ArmSmmu4KConfig *lower, *upper;
++    const ArmSmmu4KResult *lower_tables, *upper_tables;
++    uint32_t id0, id2;       /* Raw SMMUv2 identification register values. */
++    unsigned asid;          /* 0..65535, ownership managed by the caller. */
++    unsigned coherent_walk; /* Explicit: 1=inner WBWA, 0=outer NC. */
++    unsigned stall_on_fault, continue_after_fault; /* Each 0 or 1. */
++} ArmSmmu4KContextConfig;
++typedef struct {
++    uint32_t cbar, cba2r, tcr, tcr2, mair0, mair1, sctlr, reserved_zero;
++    uint64_t ttbr0, ttbr1;
++} ArmSmmu4KContextImage;
++
++/* Encode AArch64 stage1, stage2-bypass native4K SMMUv2 context registers.
++ * Capability/width/result/refusal checks precede publishing an image. Failure
++ * zeros it. Both TG0/TG1 select 4K even for a disabled region. No MMIO, power,
++ * stream/context assignment, cache barriers, TLB operations or activation.
++ * ID inputs are not proof that the caller read actual hardware. Inputs,
++ * their pointed-to configs/results, and output must be disjoint and immutable
++ * throughout the call; this is a trusted kernel integration boundary. */
++ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *,
++    ArmSmmu4KContextImage *);
++/* Compare all supplied readback fields with the freshly encoded expected
++ * image. Caller must read real hardware and independently walk its actual
++ * TTBR tables, verify ownership/coherency and handle faults/TLB lifetime.
++ * Matching caller-supplied values alone never qualify an active GPU mapping. */
++ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *,
++    const ArmSmmu4KContextImage *);
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- /dev/null
++++ b/bsd/dev/peridot_smmu4k_context.c
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: MIT */
++#include "ArmSmmu4KContext.h"
++static int width_code(unsigned bits)
++{
++    switch(bits) {case 32:return 0;case 36:return 1;case 40:return 2;
++        case 42:return 3;case 44:return 4;case 48:return 5;default:return -1;}
++}
++static unsigned width_bits(unsigned code)
++{
++    switch(code) {case 0:return 32;case 1:return 36;case 2:return 40;
++        case 3:return 42;case 4:return 44;case 5:return 48;default:return 0;}
++}
++static int region_valid(const ArmSmmu4KConfig *c,const ArmSmmu4KResult *r,unsigned upper)
++{
++    if(!c || !r)return !c && !r;
++    if(c->input_bits<32 || c->input_bits>48 || width_code(c->output_bits)<0 ||
++        (c->table_physical&4095) || r->root_physical!=c->table_physical ||
++        r->mair!=0xff44 || r->upper_region!=upper || !r->table_pages ||
++        r->leaf_pages>c->leaf_budget || r->table_pages>UINT64_MAX/4096 ||
++        r->start_level!=4-(c->input_bits-12+8)/9)return 0;
++    uint64_t limit=UINT64_C(1)<<c->output_bits;
++    return r->root_physical<limit && (uint64_t)r->table_pages*4096<=limit-r->root_physical;
++}
++ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c,
++    ArmSmmu4KContextImage *out)
++{
++    if(!out)return ArmSmmu4KArgument;
++    out->cbar=out->cba2r=out->tcr=out->tcr2=out->mair0=out->mair1=out->sctlr=0;
++    out->reserved_zero=0;
++    out->ttbr0=out->ttbr1=0;
++    if(!c || (!c->lower && !c->upper) || c->asid>65535 || c->coherent_walk>1 ||
++        c->stall_on_fault>1 || c->continue_after_fault>1 ||
++        !region_valid(c->lower,c->lower_tables,0) || !region_valid(c->upper,c->upper_tables,1))return ArmSmmu4KArgument;
++    unsigned va=width_bits((c->id2>>8)&15),pa=width_bits((c->id2>>4)&15);
++    if(!(c->id0&(UINT32_C(1)<<30)) || !(c->id2&(1u<<12)) || !va || !pa)return ArmSmmu4KUnsupported;
++    const ArmSmmu4KConfig *basis=c->lower?c->lower:c->upper;
++    if(basis->output_bits>pa || (c->lower && c->lower->input_bits>va) ||
++        (c->upper && (c->upper->input_bits>va || c->upper->output_bits!=basis->output_bits)))return ArmSmmu4KUnsupported;
++    if(c->lower && c->upper) {
++        const ArmSmmu4KResult *a=c->lower_tables,*b=c->upper_tables;
++        if(a->root_physical<b->root_physical+(uint64_t)b->table_pages*4096 &&
++           b->root_physical<a->root_physical+(uint64_t)a->table_pages*4096)return ArmSmmu4KOverlap;
++    }
++    ArmSmmu4KContextImage v;
++    v.cbar=0x1f300; /* Stage1 translation, stage2 bypass; weakest bypass attrs. */
++    v.cba2r=1;      /* AArch64. No stage2 VMID or guest translation. */
++    v.tcr=UINT32_C(2)<<30; /* TG1=4K, TG0=4K. */
++    unsigned walk=c->coherent_walk?0x3500:0x2000;
++    if(c->lower)v.tcr|=walk|(64-c->lower->input_bits);
++    else v.tcr|=1u<<7; /* EPD0 */
++    if(c->upper)v.tcr|=(walk|(64-c->upper->input_bits))<<16;
++    else v.tcr|=1u<<23; /* EPD1 */
++    v.tcr2=(7u<<15)|(1u<<4)|(unsigned)width_code(basis->output_bits);
++    v.ttbr0=(uint64_t)c->asid<<48;v.ttbr1=v.ttbr0;
++    if(c->lower)v.ttbr0|=c->lower_tables->root_physical;
++    if(c->upper)v.ttbr1|=c->upper_tables->root_physical;
++    v.mair0=0xff44;v.mair1=0;
++    v.sctlr=0x1067|(c->stall_on_fault<<7)|(c->continue_after_fault<<8);
++    v.reserved_zero=0;
++    *out=v;
++    return ArmSmmu4KSuccess;
++}
++ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *c,
++    const ArmSmmu4KContextImage *observed)
++{
++    if(!observed)return ArmSmmu4KArgument;
++    ArmSmmu4KContextImage expected;
++    ArmSmmu4KStatus status=ArmSmmu4KEncodeContext(c,&expected);
++    if(status!=ArmSmmu4KSuccess)return status;
++    /* TCR2.TBI0/TBI1 (bits 5/6, top-byte ignore) are written 0 but may read 1: the sheng Adreno MMU-500 reads
++     * 0x38071 for 0x38011 (int-008). Linux neither sets nor reads them back. With a 48-bit upstream bus the top
++     * byte of a device address is zero, so ignoring it changes no translation. Only 0 -> 1 is accepted here. */
++    const uint32_t tbi_set=observed->tcr2&~expected.tcr2&UINT32_C(0x60);
++    /* SCTLR.ASIDPNE (bit 12) is written 1 but may read 0: the same SMMU reads 0x167 for 0x1167 (int-009). Linux
++     * writes it and never reads it back. A shared ASID namespace is safe because every bank's ASID is the
++     * caller's exclusive lease. Only 1 -> 0 is accepted. */
++    const uint32_t asidpne_clear=expected.sctlr&~observed->sctlr&UINT32_C(0x1000);
++    if(expected.cbar!=observed->cbar || expected.cba2r!=observed->cba2r ||
++        expected.tcr!=observed->tcr || ((expected.tcr2^observed->tcr2)&~tbi_set) ||
++        expected.mair0!=observed->mair0 || expected.mair1!=observed->mair1 ||
++        ((expected.sctlr^observed->sctlr)&~asidpne_clear) || observed->reserved_zero || expected.ttbr0!=observed->ttbr0 ||
++        expected.ttbr1!=observed->ttbr1)return ArmSmmu4KStateMismatch;
++    return ArmSmmu4KSuccess;
++}

@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0127 context image and cache publication (2026-10-23)
+
+- peridotgpu=13 extends the powered GMU/SMMU observation callback with the
+  0126 allocation/walk. Encodes context with actual ID0/ID2 read in that
+  callback, using pinned ArmSmmu4KContext encoder. ASID1 is an inactive
+  candidate only, not an assigned lease. Stage1/4KiB capability checks apply.
+- On successful encoding, flush_dcache64 physical data and table allocations
+  then dsb sy. Logs register image without installing it. No SMMU context,
+  route, firmware or GMU writes. Frees allocations because no device received
+  their addresses. Mode12 remains CPU-only construction/walk.
+- Patch application checked after0126; compile/device acceptance pending.
+- Follow-up must retain actual buffers through active mappings and install
+  fault handling, bank ownership and bounded sync before SID5 activation.
+
 ### 0126 hardware PASS (2026-10-23)
 
 - CI39936992354 SUCCESS, commita427e91. Artifact kernel hash verified.
