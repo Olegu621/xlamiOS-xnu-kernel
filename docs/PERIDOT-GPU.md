@@ -76,6 +76,27 @@ GMU mappings. A generic driver's fixed debug/HFI windows are insufficient.
 
 ## Implementation route
 
+### User-provided Turnip release: FD735 and CPU page-size audit
+
+Inspected [AdrenoToolsDrivers v24.3.0_r2](https://github.com/K11MCH1/AdrenoToolsDrivers/releases/tag/v24.3.0_r2),
+including the actual archive (SHA256
+3316c2019abcdbacb324ed595c13f54056684acac80bff04383a1d92505ab910).
+It contains an AArch64 ELF shared library, vulkan.ad07xx.so, with Android
+libcutils/libhardware/liblog/libnativewindow/libsync dependencies; deployment
+on Darwin requires a source build and the chosen kernel-service backend.
+
+The release links [Mesa MR30379](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30379)
+(FD735/chip0x43030b00 properties/register tables) and
+[MR30431](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30431)
+(host-page-size-aware BO cache, ring allocations and Vulkan IOVA alignment).
+Both primary diffs were downloaded/read. Direct inspection of the official
+mesa-25.0.7 source confirms the FD735 entry and os_page_size alignment in
+freedreno_bo_cache.c, tu_device.cc and tu_knl_drm.cc. These changes are already
+present in the intended Mesa version; do not replay old patches blindly.
+CPU16KiB allocation/mmap alignment and GPU/GMU native4KiB translations must
+remain distinct when implementing the Darwin BO service. This source audit
+does not establish GPU command completion on peridot or rendered iOS frames.
+
 Broader source search found a second ready iOS16 frontend:
 [ios-sailfish sweetgl](https://github.com/joranv1/ios-sailfish/tree/d7a74344828c87d37c64f87f237525cb65b7e5f5/tools/sweetgl).
 It targets iOS16.7 and already contains EAGL dispatch, IOSurface imports and

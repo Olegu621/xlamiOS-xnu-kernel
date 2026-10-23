@@ -4,6 +4,51 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0139 START-time allocation implementation; 0138b longer UI observation
+
+- Mode19 retains proven0138 setup, then sends START10 and handles real
+  version0/1 MEM_ALLOC20 descriptors. Owned NC backing, native4K GMU mappings,
+  inactive GPU mappings, exact permissions/alignments and real descriptor ACKs.
+  Bounded48 buffers/64MiB; duplicate kind+handle reuses the same allocation.
+- GMU and inactive GPU table pools are256KiB each. Append-only map code adds
+  invalid-to-valid entries/pages, publishing children before parents, and never
+  replaces an existing descriptor/root. New GMU addresses remain unpublished
+  until owned-bank observation, actual ASID TLBI/TLBSYNC and final readback.
+  This does not call LiveUpdate under a false whole-device quiescence claim.
+- GMU-only kernel buffers follow KGSL RW/privileged reserve policy; shared
+  GPU imports use their GMU flags. Secure-preempt slot uses KGSL non-secure
+  fallback and reports corrected flags/size. MMIO/hardware-fence resource
+  requests refuse until their actual owners exist; ordinary RAM is not used.
+- Counter110 reports the documented optional allocation failure (offsets0),
+  trace155 consumes its notification. START ACK requires exact request/result.
+  Existing reset/drain/context shutdown remains; unexpected live GX panics
+  retaining clocks and resources. All backing stays pinned until reboot.
+- Exact0138 patch application checked.0139 compilation/device behavior pending.
+  No GPU OOB/SQE/ZAP/CP startup or GPU submission implemented in this patch.
+- User observed only Apple logo on0138 and suggested60s was too short. Same
+  kernel/image configuration is now temporarily running as0138b with timer180,
+  imageSHA c957dfee99ab5d705ad5fdcf9789b1509cb3457e1eeb728d38616acb24b97242.
+  cycle0138b console and user observation pending; no partitions flashed.
+- User supplied AdrenoToolsDrivers v24.3.0_r2. Actual Android ELF inspected;
+  primary Mesa MR30379/30431 diffs read. Verified intended Mesa25.0.7 already
+  contains FD735 and host-page-size-aware BO/Vulkan IOVA alignment. Details in
+  docs/PERIDOT-GPU.md. User is researching EAGL/IOSurface/HWSCHED sources.
+
+### 0138 HARDWARE PASS: nine real HWSCHED preparation ACKs
+
+- CI39985882744 SUCCESS/a3ca502. ImageSHA256
+  f6b10d789601526611b2edd7e410effd344c16af69c8231608353be21c6f74bc.
+  cycle0138 automatically returned to recovery and captured console.
+- Baseline GET_VALUE125 returns1/error0. PERF15/49words and BW3/160words
+  each return actual3-word ACK/result0. IFPC-disable/HWSCHED/KPROF/DMS each
+  return4-word v5 ACK/result0/error0; CORE_FW_START14 returns3-word/result0.
+  Query121 context queues and122 GMU_AB each return1/error0. Total9 ACKs.
+- GX stays collapsed0x22f801. Reset/GBIF drain/context disable/TLB sync pass,
+  GFSR0/FSR0x400 no fault. All backing retained. No panic found.
+- SpringBoard/backboardd actually exec. Repeated IOAcceleratorES/Legacy
+  matches return none; IOSurface/framebuffer swaps occur. User reports only
+  Apple logo during60s cycle. No visible iOS UI or GPU-rendered frame proven.
+
 ### 0137 device result; 0138 per-command ACK format correction
 
 - CI39983756607 SUCCESS/a3b19f9. ImageSHA256

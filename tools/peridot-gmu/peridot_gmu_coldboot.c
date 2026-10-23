@@ -20,7 +20,7 @@ struct pgcb_saved {
 };
 static struct {
     unsigned attempted, saved_count, bank;
-    struct pgcb_memory memory[8];
+    struct pgcb_memory memory[9];
     struct pgcb_saved saved[48];
 } pgcb;
 
@@ -235,6 +235,7 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
     return false;
 }
 #include "peridot_hwsched_prepare.c"
+#include "peridot_runtime_memory.c"
 static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
 {
@@ -243,13 +244,13 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
      * starts non-GPU clients, including the GMU SID5, at context bank2. */
     pgcb.bank = 2;
     bool context = false, routed = false, released = false, exchanged = false;
-    bool prepared = false;
+    bool prepared = false, started = false;
     uint32_t mode = 0;
     PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
     uint32_t saved_smr = 0, saved_s2cr = 0;
     vm_offset_t gpu = 0, rsc = 0, pdc = 0, cc = 0;
     ArmSmmu4KRange ranges[7];
-    ArmSmmu4KConfig config = {32,36,0,129};
+    ArmSmmu4KConfig config = {32,36,0,mode == 19 ? 129+16384 : 129};
     ArmSmmu4KResult built = {0};
     ArmSmmu4KContextConfig cfg = {0};
     ArmSmmu4KIo io = {(void *)smmu,0x40000,pgpu_ctx_read32,pgpu_ctx_read64,
@@ -266,9 +267,9 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
         printf("PERIDOT GMU: exclusive reset/idle precondition refused\n"); return;
     }
     const uint32_t addresses[] = {0x4000,0x100000,0x200000,0x300000,
-        0x60000000,0x60002000,0x60020000,0};
-    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,65536};
-    for (unsigned i = 0; i < 8; ++i) {
+        0x60000000,0x60002000,0x60020000,0,0};
+    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode == 19 ? 262144u : 65536u,262144};
+    for (unsigned i = 0; i < (mode == 19 ? 9u : 8u); ++i) {
         pgcb.memory[i].iova = addresses[i]; pgcb.memory[i].bytes = sizes[i];
         if (!pgcb_allocate(&pgcb.memory[i])) goto out;
         if (i < 7) ranges[i] = (ArmSmmu4KRange){addresses[i],pgcb.memory[i].physical,
@@ -276,7 +277,7 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     }
     config.table_physical = pgcb.memory[7].physical;
     ArmSmmu4KStatus status = ArmSmmu4KBuild(&config,ranges,7,
-        pgcb.memory[7].cpu,16,&built);
+        pgcb.memory[7].cpu,pgcb.memory[7].bytes/4096,&built);
     bool walked = status == ArmSmmu4KSuccess && pgcb_walk(&built,ranges,7,&pgcb.memory[7]);
     printf("PERIDOT GMU: complete map status=%u walked=%u tables=%lu leaves=%lu\n",
         status,walked,(unsigned long)built.table_pages,(unsigned long)built.leaf_pages);
@@ -307,8 +308,8 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     if (pgcb_read(smmu,0xc00) != pgcb.bank || pgcb_read(smmu,0x800) != 0x80000005u) goto out;
     gpu = ml_io_map(0x3d00000,0x40000);
     rsc = ml_io_map(0x3d50000,0x10000); pdc = ml_io_map(0xb280000,0x10000);
-    if (mode == 18) cc = ml_io_map(0x3d90000,0xa000);
-    if (!gpu || !rsc || !pdc || (mode == 18 && !cc) || pgcb_read(rsc,0x101*4)) goto out;
+    if (mode >= 18) cc = ml_io_map(0x3d90000,0xa000);
+    if (!gpu || !rsc || !pdc || (mode >= 18 && !cc) || pgcb_read(rsc,0x101*4)) goto out;
     const uint32_t rsc_words[] = {4,11,14,13,16,15,18,17,256,8,9,10,340,341,342,343,344};
     const uint32_t rsc_values[] = {1u<<24,1,0,0,0,0,0x80000021,0,0,
         0x4520,0x4510,0x4514,0xeaaae5a0,0xe1a1ebab,0xa2e0a581,0xecac82e2,0x0020edad};
@@ -344,14 +345,16 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     bool hfi_ready = pgcb_poll(gmu,0x1f980*4-0x68000,1,1,200000);
     printf("PERIDOT GMU: HFI control ready=%u\n",hfi_ready);
     if (hfi_ready) exchanged = pgcb_exchange(&hfi,gmu,smmu);
-    if (exchanged && mode == 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
+    if (exchanged && mode >= 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
+    if (prepared && mode == 19)
+        started = pgrt_start(&hfi,gmu,smmu,&pgcb_prepared_sequence,&built,&io,&cfg);
 out:
     pgcb_faults(gmu,smmu,"before stop");
     if (released) {
-        if (mode == 18) {
+        if (mode >= 18) {
             uint32_t gx = pgcb_read(cc,PGPU_GX_GDSCR);
-            printf("PERIDOT HWSCHED: prepare=%u GX-GDSCR=%#x collapsed=%u\n",
-                prepared,gx,pgpu_collapsed(gx));
+            printf("PERIDOT HWSCHED: prepare=%u START=%u GX-GDSCR=%#x collapsed=%u\n",
+                prepared,started,gx,pgpu_collapsed(gx));
             if (!pgpu_collapsed(gx))
                 panic("PERIDOT HWSCHED unexpected active GX; retaining clocks and mappings");
         }

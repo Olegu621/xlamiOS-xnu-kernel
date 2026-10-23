@@ -103,3 +103,22 @@ feature/value firmware errors on this HFI version. The0138 correction selects
 the contract per command, retains exact request matching and result checks,
 and logs response length/result. START/memory requests and GPU submissions
 remain separate unfinished driver phases.
+
+### 0138 HWSCHED preparation accepted by real firmware
+
+[CI39985882744](https://github.com/Olegu621/xlamiOS-xnu-kernel/actions/runs/39985882744)
+built successfully. Hardware returned result0 for PERF49 and BW160 (three-word
+ACKs), IFPC-disable/HWSCHED/KPROF/DMS (four-word v5 ACKs, error0), and
+CORE_FW_START (three-word ACK). Queries121/context queues and122/GMU_AB
+each return1/error0. Nine exact requests were acknowledged. GX remained
+collapsed, reset/drain/context disable completed and recovery returned.
+SpringBoard/backboardd execute, but repeated IOAcceleratorES/Legacy matching
+finds no service; the user's screen observation was Apple logo only at60s.
+The same kernel is also being observed with a180s diagnostic timer.
+
+0139 introduces START's actual allocation/reply phase, with retained NC
+buffers, append-only native4K mappings, bounded ASID synchronization and an
+inactive GPU root for the future GPU boot. Existing translations stay intact;
+each new VA is advertised only after its backing and translation are published.
+Unknown platform resources are refused. GPU OOB/SQE/ZAP/CP and rendered iOS
+frames are still future phases;0139 compilation and hardware behavior pending.

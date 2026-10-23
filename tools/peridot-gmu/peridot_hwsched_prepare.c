@@ -64,6 +64,7 @@ static bool pgcb_request(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
     return false;
 }
 
+static unsigned pgcb_prepared_sequence;
 static bool pgcb_hwsched_prepare(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
 {
     unsigned sequence = 1, acknowledged = 0;
@@ -107,5 +108,6 @@ static bool pgcb_hwsched_prepare(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t 
     }
     printf("PERIDOT HWSCHED: core preparation acknowledged=%u; START/GPU submission pending\n",
         acknowledged);
+    pgcb_prepared_sequence = sequence;
     return true;
 }
