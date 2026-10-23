@@ -53,7 +53,7 @@ def main():
         sys.exit('Fastboot did not appear; BCB backup is in the output directory')
     boot = run(fastboot + ['boot', str(image)], timeout=45)
     (a.out / 'fastboot-boot.txt').write_bytes(boot.stdout + boot.stderr)
-    metadata = {'image': str(image), 'sha256': hashlib.file_digest(image.open('rb'), 'sha256').hexdigest()}
+    metadata = {'image': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}
     (a.out / 'boot.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print('Temporary boot accepted; waiting for diagnostic reset...', flush=True)
     start = time.monotonic()
@@ -68,9 +68,9 @@ def main():
             except (ValueError, IndexError):
                 ready = False
             if ready:
-                pull = Path(__file__).resolve().with_name('sweet-log-pull.sh')
+                pull = Path(__file__).resolve().with_name('sweet-log-pull.py')
                 for _ in range(3):
-                    r = run([str(pull), '-s', serial, str(a.out / 'console.txt')], timeout=60, check=False)
+                    r = run([sys.executable, str(pull), '-s', serial, str(a.out / 'console.txt')], timeout=60, check=False)
                     (a.out / 'pull-result.txt').write_bytes(r.stdout + r.stderr)
                     if r.returncode == 0:
                         print(f'Captured console: {a.out / "console.txt"}', flush=True)
