@@ -1,0 +1,352 @@
+--- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:28:44.404235674 +0300
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:28:44.406235692 +0300
+@@ -116,7 +116,9 @@
+ 	PGPU_CLOCK_GX_ON_TIMEOUT,
+ 	PGPU_CLOCK_GX_OFF_TIMEOUT,
+ 	PGPU_CLOCK_MEASURE_COUNTER_TIMEOUT,
+-	PGPU_CLOCK_MEASURE_PASS
++	PGPU_CLOCK_MEASURE_PASS,
++	PGPU_CLOCK_GMU_UPDATE_TIMEOUT,
++	PGPU_CLOCK_GMU_RESTORE_TIMEOUT
+ };
+ 
+ static inline bool
+@@ -990,6 +992,252 @@
+ 	}
+ 	if (!probe->counter_ok) {
+ 		return PGPU_CLOCK_MEASURE_COUNTER_TIMEOUT;
++	}
++	return PGPU_CLOCK_MEASURE_PASS;
++}
++
++/* ---- 0121: program the GMU and hub clock sources, then measure ----
++ * The measured handoff state (0120) leaves the CX-domain GPUCC clocks on
++ * their crystal default: gmu_clk_src (0x9168) and hub_clk_src (0x919c)
++ * are halted/no-source, so cx-gmu and hub-cx-int read19.2MHz with CX live
++ * instead of the rate the GMU needs. The vendor gpucc-cliffs tables and
++ * the working reference driver agree on the rates: 200MHz for the GMU
++ * (GPLL0_OUT_MAIN_DIV / 1.5) and 200MHz for the hub (GPLL0_OUT_MAIN / 3).
++ * The RCG2 configuration field is [4:0] 2*divider-1, [10:8] source, so
++ * gmu=0x602 (source6, divider1.5) and hub=0x505 (source5, divider3); the
++ * command register takes bit0 UPDATE and is polled until it clears.
++ * The branches that make the GMU clock tree run are cx_gmu0x90e4,
++ * cxo0x90f0, hub_cx_int0x90f4, memnoc_gfx0x90fc, the SMMU vote0x7000 and
++ * the configuration AHB0x90c8 (written but not checked: its status is the
++ * DELAY-class bit that reads0 regardless, as 0120 measured). Every branch
++ * and both RCGs are saved and restored; the clock list is measured with
++ * CX off, with CX live before programming and with the GMU tree running.
++ * No GMU register is touched: this only makes the GMU's clocks run.
++ */
++#define PGPU_GMU_RCG_CMD 0x9168u
++#define PGPU_GMU_RCG_CFG 0x916cu
++#define PGPU_GMU_CFG_PROGRAM ((6u << 8) | 2u)	/* GPLL0_OUT_MAIN_DIV / 1.5 */
++#define PGPU_HUB_CFG_GMU_PROGRAM ((5u << 8) | 5u)	/* GPLL0_OUT_MAIN / 3 */
++#define PGPU_BRANCH_CX_GMU 0x90e4u
++#define PGPU_BRANCH_CXO 0x90f0u
++#define PGPU_BRANCH_HUB_CX 0x90f4u
++#define PGPU_BRANCH_MEMNOC 0x90fcu
++#define PGPU_BRANCH_SMMU 0x7000u
++#define PGPU_RCG_SOURCE_MASK 0x371fu
++
++struct pgpu_gmu_clock_probe {
++	uint32_t gmu_cfg_before, gmu_cfg_after;
++	uint32_t hub_cfg_before, hub_cfg_after;
++	unsigned measured_off, measured_live, measured_hub;
++	bool counter_ok;
++	bool cx_powered;
++	bool cx_restored;
++	bool branches_restored;
++	bool rcg_restored;
++};
++
++static inline bool
++pgpu_rcg_program(const struct pgpu_power_io *io, unsigned cmd_reg,
++    unsigned cfg_reg, uint32_t program, uint32_t *before, uint32_t *after)
++{
++	uint32_t cfg = io->read(io->context, cfg_reg);
++	uint32_t cmd = io->read(io->context, cmd_reg);
++	if (cfg == UINT32_MAX || cmd == UINT32_MAX) {
++		return false;
++	}
++	*before = cfg;
++	io->write(io->context, cfg_reg,
++	    (cfg & ~PGPU_RCG_SOURCE_MASK) | program);
++	io->write(io->context, cmd_reg, cmd | PGPU_RCG_CMD_UPDATE);
++	bool settled = pgpu_rcg_update_settled(io, cmd_reg);
++	*after = io->read(io->context, cfg_reg);
++	return settled &&
++	    *after == ((cfg & ~PGPU_RCG_SOURCE_MASK) | program);
++}
++
++static inline bool
++pgpu_rcg_restore(const struct pgpu_power_io *io, unsigned cmd_reg,
++    unsigned cfg_reg, uint32_t cfg_saved)
++{
++	uint32_t cmd = io->read(io->context, cmd_reg);
++	if (cmd == UINT32_MAX) {
++		return false;
++	}
++	io->write(io->context, cfg_reg, cfg_saved);
++	io->write(io->context, cmd_reg, cmd | PGPU_RCG_CMD_UPDATE);
++	return pgpu_rcg_update_settled(io, cmd_reg) &&
++	    io->read(io->context, cfg_reg) == cfg_saved;
++}
++
++/* Mode8 stage. CX and GX are collapsed on entry. Measures the caller's
++ * clock list at handoff, powers CX and measures again, programs the GMU
++ * and hub clock sources, enables the GMU clock branches, measures the
++ * running tree, then restores branches, both RCGs and CX in that order.
++ * A refused precondition or an unreadable register means no write at all.
++ */
++static inline enum pgpu_clock_result
++pgpu_cx_gmu_clock_stage(const struct pgpu_power_io *io,
++    const struct pgpu_power_io *gcc_io, const unsigned *sels, unsigned count,
++    uint32_t *off_hz, uint32_t *live_hz, uint32_t *hub_hz,
++    struct pgpu_gmu_clock_probe *probe, uint32_t *cx_final,
++    uint32_t *gx_final)
++{
++	static const unsigned branches[] = {
++		PGPU_BRANCH_CX_GMU, PGPU_BRANCH_CXO, PGPU_BRANCH_HUB_CX,
++		PGPU_BRANCH_MEMNOC, PGPU_BRANCH_SMMU
++	};
++	enum { NB = sizeof(branches) / sizeof(branches[0]) };
++	uint32_t saved[NB];
++	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
++	uint32_t hw = io->read(io->context, PGPU_CX_HW);
++	uint32_t gx = io->read(io->context, PGPU_GX_GDSCR);
++	uint32_t gate = io->read(io->context, PGPU_AHB_CBCR);
++	uint32_t hub_cmd = io->read(io->context, PGPU_HUB_RCG_CMD);
++	uint32_t hub_cfg = io->read(io->context, PGPU_HUB_RCG_CFG);
++	uint32_t gmu_cmd = io->read(io->context, PGPU_GMU_RCG_CMD);
++	uint32_t gmu_cfg = io->read(io->context, PGPU_GMU_RCG_CFG);
++	if (count == 0 || !pgpu_collapsed(cx) || !pgpu_collapsed(gx) ||
++	    hw == UINT32_MAX || (hw & PGPU_ON) || gate == UINT32_MAX ||
++	    (gate & PGPU_AHB_ON) || hub_cmd == UINT32_MAX ||
++	    hub_cfg == UINT32_MAX || gmu_cmd == UINT32_MAX ||
++	    gmu_cfg == UINT32_MAX ||
++	    (hub_cmd & (PGPU_RCG_CMD_UPDATE | PGPU_RCG_CMD_DIRTY |
++	    PGPU_RCG_CMD_ROOT_OFF)) ||
++	    (hub_cfg & ~PGPU_HUB_CFG_KNOWN) ||
++	    (hub_cfg & PGPU_HUB_CFG_HW_CTRL) ||
++	    (gmu_cmd & (PGPU_RCG_CMD_UPDATE | PGPU_RCG_CMD_DIRTY)) ||
++	    (gmu_cfg & ~PGPU_HUB_CFG_KNOWN) ||
++	    (gmu_cfg & PGPU_HUB_CFG_HW_CTRL)) {
++		return PGPU_CLOCK_REFUSED;
++	}
++	for (unsigned i = 0; i < NB; ++i) {
++		saved[i] = io->read(io->context, branches[i]);
++		if (saved[i] == UINT32_MAX) {
++			return PGPU_CLOCK_REFUSED;
++		}
++	}
++	probe->counter_ok = true;
++	for (unsigned i = 0; i < count; ++i) {
++		if (!pgpu_measure_clock(io, gcc_io, sels[i], &off_hz[i])) {
++			probe->counter_ok = false;
++			break;
++		}
++		probe->measured_off = i + 1;
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx & ~PGPU_COLLAPSE);
++	probe->cx_powered = pgpu_power_wait(io, true);
++	cx = io->read(io->context, PGPU_CX_GDSCR);
++	gx = io->read(io->context, PGPU_GX_GDSCR);
++	if (cx == UINT32_MAX || (cx & (PGPU_HW_CONTROL | PGPU_OVERRIDE)) ||
++	    !pgpu_collapsed(gx)) {
++		return PGPU_CLOCK_OWNERSHIP_LOST;
++	}
++	if (!probe->cx_powered) {
++		io->write(io->context, PGPU_CX_GDSCR, cx | PGPU_COLLAPSE);
++		probe->cx_restored = pgpu_power_wait(io, false) &&
++		    pgpu_collapsed(io->read(io->context, PGPU_CX_GDSCR));
++		if (cx_final) {
++			*cx_final = io->read(io->context, PGPU_CX_GDSCR);
++		}
++		if (gx_final) {
++			*gx_final = io->read(io->context, PGPU_GX_GDSCR);
++		}
++		return PGPU_CLOCK_ON_TIMEOUT;
++	}
++	if (probe->counter_ok) {
++		for (unsigned i = 0; i < count; ++i) {
++			if (!pgpu_measure_clock(io, gcc_io, sels[i],
++			    &live_hz[i])) {
++				probe->counter_ok = false;
++				break;
++			}
++			probe->measured_live = i + 1;
++		}
++	}
++	probe->branches_restored = true;
++	probe->rcg_restored = true;
++	enum pgpu_clock_result failure = PGPU_CLOCK_MEASURE_PASS;
++	if (probe->counter_ok) {
++		if (!pgpu_rcg_program(io, PGPU_GMU_RCG_CMD,
++		    PGPU_GMU_RCG_CFG, PGPU_GMU_CFG_PROGRAM,
++		    &probe->gmu_cfg_before, &probe->gmu_cfg_after)) {
++			failure = PGPU_CLOCK_GMU_UPDATE_TIMEOUT;
++		} else if (!pgpu_rcg_program(io, PGPU_HUB_RCG_CMD,
++		    PGPU_HUB_RCG_CFG, PGPU_HUB_CFG_GMU_PROGRAM,
++		    &probe->hub_cfg_before, &probe->hub_cfg_after)) {
++			failure = PGPU_CLOCK_HUB_UPDATE_TIMEOUT;
++		} else {
++			for (unsigned i = 0; i < NB; ++i) {
++				io->write(io->context, branches[i],
++				    saved[i] | 1u);
++			}
++			io->write(io->context, PGPU_AHB_CBCR,
++			    gate | PGPU_AHB_ON);
++			io->delay_us(10);
++			for (unsigned i = 0; i < count; ++i) {
++				if (!pgpu_measure_clock(io, gcc_io, sels[i],
++				    &hub_hz[i])) {
++					probe->counter_ok = false;
++					break;
++				}
++				probe->measured_hub = i + 1;
++			}
++			io->write(io->context, PGPU_AHB_CBCR, gate);
++			for (unsigned i = NB; i > 0; --i) {
++				io->write(io->context, branches[i - 1],
++				    saved[i - 1]);
++			}
++			for (unsigned i = 0; i < NB; ++i) {
++				if (io->read(io->context, branches[i]) !=
++				    saved[i]) {
++					probe->branches_restored = false;
++				}
++			}
++			probe->hub_cfg_after =
++			    io->read(io->context, PGPU_HUB_RCG_CFG);
++			probe->gmu_cfg_after =
++			    io->read(io->context, PGPU_GMU_RCG_CFG);
++			bool hub_back = pgpu_rcg_restore(io, PGPU_HUB_RCG_CMD,
++			    PGPU_HUB_RCG_CFG, hub_cfg);
++			bool gmu_back = pgpu_rcg_restore(io, PGPU_GMU_RCG_CMD,
++			    PGPU_GMU_RCG_CFG, gmu_cfg);
++			probe->rcg_restored = hub_back && gmu_back;
++			if (!hub_back) {
++				failure = PGPU_CLOCK_HUB_RESTORE_TIMEOUT;
++			} else if (!gmu_back) {
++				failure = PGPU_CLOCK_GMU_RESTORE_TIMEOUT;
++			} else if (!probe->branches_restored) {
++				failure = PGPU_CLOCK_BRANCH_RESTORE_TIMEOUT;
++			}
++		}
++		if (failure != PGPU_CLOCK_MEASURE_PASS) {
++			if (failure == PGPU_CLOCK_GMU_UPDATE_TIMEOUT ||
++			    failure == PGPU_CLOCK_HUB_UPDATE_TIMEOUT) {
++				(void)pgpu_rcg_restore(io, PGPU_HUB_RCG_CMD,
++				    PGPU_HUB_RCG_CFG, hub_cfg);
++				(void)pgpu_rcg_restore(io, PGPU_GMU_RCG_CMD,
++				    PGPU_GMU_RCG_CFG, gmu_cfg);
++				probe->rcg_restored = false;
++			}
++		}
++	}
++	io->write(io->context, PGPU_CX_GDSCR, cx | PGPU_COLLAPSE);
++	probe->cx_restored = pgpu_power_wait(io, false) &&
++	    pgpu_collapsed(io->read(io->context, PGPU_CX_GDSCR));
++	if (cx_final) {
++		*cx_final = io->read(io->context, PGPU_CX_GDSCR);
++	}
++	if (gx_final) {
++		*gx_final = io->read(io->context, PGPU_GX_GDSCR);
++	}
++	if (!probe->cx_restored) {
++		return PGPU_CLOCK_OFF_TIMEOUT;
++	}
++	if (failure != PGPU_CLOCK_MEASURE_PASS) {
++		return failure;
++	}
++	if (!probe->counter_ok) {
++		return PGPU_CLOCK_MEASURE_COUNTER_TIMEOUT;
+ 	}
+ 	return PGPU_CLOCK_MEASURE_PASS;
+ }
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:28:44.405235683 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:28:44.407235701 +0300
+@@ -9,7 +9,9 @@
+  * the GX domain and only then retries the gate; a diagnostic reset timer
+  * is required for all of them. Mode7 stops trusting the branch readbacks
+  * and measures the GPUCC clocks through the GCC debug counter with CX off
+- * and live. No firmware/GPU/GMU/SMMU or core register access.
++ * and live; mode8 programs the GMU and hub clock sources, enables the GMU
++ * clock branches, measures the running tree and restores everything. No
++ * firmware/GPU/GMU/SMMU or core register access.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -75,7 +77,7 @@
+ 	uint32_t mode = 0;
+ 	PE_parse_boot_argn("peridotgpu", &mode, sizeof(mode));
+ 	if ((mode != 1 && mode != 2 && mode != 3 && mode != 4 && mode != 5 &&
+-	    mode != 6 && mode != 7) || attempted) {
++	    mode != 6 && mode != 7 && mode != 8) || attempted) {
+ 		return;
+ 	}
+ 	attempted = true;
+@@ -342,5 +344,63 @@
+ 		};
+ 		printf("PERIDOT GPU: clock measurement %s\n", names[result]);
+ 	}
++	if (mode == 8) {
++		uint32_t reset = 0;
++		PE_parse_boot_argn("sweetdiagreset", &reset, sizeof(reset));
++		if (reset < 30 || reset > 3600) {
++			printf("PERIDOT GPU: GMU clock stage refused: diagnostic reset timer required\n");
++			return;
++		}
++		static const unsigned sels[] = {
++			0x16, 0x1d, 0x1e, 0x2d, 0x1f, 0x21, 0x0b, 0x0e
++		};
++		static const char *const clock_names[] = {
++			"ahb", "cx-gmu", "cxo", "hub-aon", "hub-cx-int",
++			"memnoc-gfx", "cxo-aon", "gx-gfx3d"
++		};
++		enum { N = sizeof(sels) / sizeof(sels[0]) };
++		uint32_t off[N] = { 0 }, live[N] = { 0 }, hub[N] = { 0 };
++		printf("PERIDOT GPU: GMU clock stage: gmu_clk_src program %#x, hub_clk_src program %#x, GMU branches on\n",
++		    PGPU_GMU_CFG_PROGRAM, PGPU_HUB_CFG_GMU_PROGRAM);
++		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		struct pgpu_power_io gcc_io = { (void *)gcc, pgpu_power_read, pgpu_power_write, delay };
++		struct pgpu_gmu_clock_probe probe = { 0 };
++		uint32_t cx_out = 0, gx_out = 0;
++		enum pgpu_clock_result result = pgpu_cx_gmu_clock_stage(&io,
++		    &gcc_io, sels, N, off, live, hub, &probe, &cx_out, &gx_out);
++		for (unsigned i = 0; i < N; ++i) {
++			printf("PERIDOT GPU: MEAS %s sel=%#x off=%u live=%u programmed=%u\n",
++			    clock_names[i], sels[i], off[i], live[i], hub[i]);
++		}
++		printf("PERIDOT GPU: GMU clock probe off=%u/%u live=%u/%u programmed=%u/%u counter=%u powered=%u cx=%u branches=%u rcg=%u; gmuCFG=%#x->%#x hubCFG=%#x->%#x CX=%#x hw=%#x GX=%#x\n",
++		    probe.measured_off, (unsigned)N, probe.measured_live,
++		    (unsigned)N, probe.measured_hub, (unsigned)N,
++		    probe.counter_ok, probe.cx_powered, probe.cx_restored,
++		    probe.branches_restored, probe.rcg_restored,
++		    probe.gmu_cfg_before, probe.gmu_cfg_after,
++		    probe.hub_cfg_before, probe.hub_cfg_after, cx_out,
++		    pgpu_read(cc, PGPU_CX_HW), gx_out);
++		static const char *const names[] = {
++			"REFUSED live/unknown domain, bad RCG state or empty clock list",
++			"PASS (unused in this stage)",
++			"FAIL CX power-on timeout; collapse restored",
++			"FAIL AHB gate timeout (unused in this stage)",
++			"FAIL AHB gate restore timeout (unused in this stage)",
++			"FAIL CX collapse timeout",
++			"FAIL ownership changed; leave for diagnostic reset",
++			"FAIL hub_clk_src update timeout; originals restored as far as possible",
++			"FAIL hub_clk_src restore timeout",
++			"FAIL branch restore timeout",
++			"FAIL branch none latched (unused in this stage)",
++			"FAIL branch partial latch (unused in this stage)",
++			"FAIL GX power-on timeout (unused in this stage)",
++			"FAIL GX collapse timeout (unused in this stage)",
++			"FAIL counter timeout or unreadable debug register; no clock programming",
++			"PASS GMU clock tree programmed, measured and restored",
++			"FAIL gmu_clk_src update timeout; originals restored as far as possible",
++			"FAIL gmu_clk_src restore timeout"
++		};
++		printf("PERIDOT GPU: GMU clock stage %s\n", names[result]);
++	}
+ }
+ #endif
