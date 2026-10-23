@@ -4,6 +4,24 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0147 candidate: native CIF10 surface capability, exact-cache guard
+
+- Kernel CI40041887330/d585842 builds bounded raw chunks. New Mesa candidate
+  removes0146's unsuccessful extension filter, restoring actual Mesa aliases.
+- Exact20H392 native initializer CADeviceSupportsCIF10_block_invoke at
+ 188378950 queries ChipID. Display constructor1883adff0 copies its byte into
+  the display's CIF10 flag independently of GLES OES float extensions.
+- New surface_caps.c runs only in backboardd, checks cacheUUID
+ 8f970452c9e33e88b114feb1864bc9e0 plus exact initializer entry/exit words,
+  address bounds and native data VM write permissions. Uses the ORIGINAL
+  dispatch_once_f token/initializer, then clears only the unsupported CIF10
+  interop capability. No executable page modification or ChipID spoofing.
+- This is a narrow candidate display-capability correction, NOT proven to
+  select BGRA until the next actual surface creation log. Main display and
+  imported client formats must both be inspected; Metal is not implemented.
+- The previous OES filter failed and was removed. Automatic capture160 /
+  reset180 remain. No extra user screen confirmation is required for capture.
+
 ### 0146 actual Mesa-to-GPU batches PASS; display format and raw size block UI
 
 - Full180s capture returned. User requested3minutes before reboot again:

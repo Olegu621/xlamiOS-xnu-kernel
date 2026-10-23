@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - tools/peridot-mesa-build.py
+      - tools/peridot-mesa/**
       - .github/workflows/peridot-mesa.yml
 concurrency:
   group: peridot-mesa-${{ github.ref }}
