@@ -4,6 +4,27 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
+### 0133 combined cold boot; automatic return reauthorized (2026-10-23)
+
+- User explicitly reauthorized automatic reboots. The next temporary image
+  uses sweetdiagreset=60/sweetpanicreset=1 and the recovery/log cycle again.
+  The previous manual-return preference is superseded for these diagnostics.
+- 0132 CI39952943177 SUCCESS and temporary boot accepted; user reported
+  Apple logo or iOS screen. No precise screen classification or GMU execution
+  was established by that answer. Phone now back in recovery on this PC.
+- 0133 adds mode17: 129 native4K leaves over retained owned NC allocations,
+  complete external firmware/HFI/log maps, TCM upload and readback, bank0/SID5,
+  gen7_11_0 PDC/RSC sequence at word0x154, GBIF QSB0x71e20/QOS0x33,
+  SIP SCM GPU_INIT_REGS, CM3 release, FW_INIT bit8, HFI initialization and
+  real GET_VALUE125 ACK matching. Checkpoints1/2/3 stop after upload/config/FW.
+- After release, reset and bounded GBIF ARB halt acknowledgment precede
+  route quarantine, context disable/TLB sync and saved-register restoration.
+  Unconfirmed cleanup panics with allocations/clocks retained. All remapped
+  backing allocations remain pinned until reboot. No firmware bytes in Git.
+- Implementation prepared; compilation and actual device exchange pending.
+  HWSCHED performance/bandwidth/startup, GPU commands and iOS rendering are
+  still required even if this GMU exchange succeeds. Acceleration is not ready.
+
 ### Manual-return boot tooling (2026-10-23)
 
 - tools/peridot-boot-manual.py verifies actual packed cmdline contains
