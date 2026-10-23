@@ -242,6 +242,7 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
 #include "peridot_hwsched_prepare.c"
 #include "peridot_runtime_memory.c"
 #include "peridot_gpu_boot.c"
+#include "peridot_gpu_runtime.c"
 static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     const uint8_t *fw, const AdrenoFirmwareBlock *blocks, size_t count)
 {
@@ -274,7 +275,7 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     }
     const uint32_t addresses[] = {0x4000,0x100000,0x200000,0x300000,
         0x60000000,0x60002000,0x60020000,0,0};
-    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode >= 19 ? 262144u : 65536u,262144};
+    const uint32_t sizes[] = {81920,110592,77824,151552,8192,81920,16384,mode >= 19 ? 262144u : 65536u,mode == 21 ? 4194304u : 262144u};
     for (unsigned i = 0; i < (mode >= 19 ? 9u : 8u); ++i) {
         pgcb.memory[i].iova = addresses[i]; pgcb.memory[i].bytes = sizes[i];
         if (!pgcb_allocate(&pgcb.memory[i])) goto out;
@@ -354,8 +355,23 @@ static void pgpu_coldboot(vm_offset_t gmu, vm_offset_t smmu,
     if (exchanged && mode >= 18) prepared = pgcb_hwsched_prepare(&hfi,gmu,smmu);
     if (prepared && mode >= 19)
         started = pgrt_start(&hfi,gmu,smmu,&pgcb_prepared_sequence,&built,&io,&cfg);
-    if (started && mode == 20)
-        pggx_boot(&hfi,gpu,gmu,smmu,cc,rsc,&io,&pgcb_prepared_sequence);
+    if (started && (mode == 20 || mode == 21)) {
+        if (mode == 21) pgdr.lock=IOLockAlloc();
+        bool retain=mode == 21 && pgdr.lock;
+        bool done=pggx_boot(&hfi,gpu,gmu,smmu,cc,rsc,&io,&pgcb_prepared_sequence,retain);
+        if (done && retain) {
+            pgdr.gmu_config=config; pgdr.gmu_tables=built; pgdr.gmu_context=cfg;
+            pgdr.gmu_context.lower=&pgdr.gmu_config;
+            pgdr.gmu_context.lower_tables=&pgdr.gmu_tables;
+            pgdr.io=io; pgdr.hfi=hfi; pgdr.sequence=pgcb_prepared_sequence;
+            pgdr.gpu=gpu; pgdr.gmu=gmu; pgdr.smmu=smmu; pgdr.cc=cc; pgdr.rsc=rsc;
+            __atomic_store_n(&pgdr.ready,true,__ATOMIC_RELEASE);
+            __asm__ volatile("dmb ishst" ::: "memory");
+            pgpu_clock_lease_requested=true;
+            printf("PERIDOT GPU: long-lived HFI/CB0/CB2 ownership copied to static driver state\n");
+            return;
+        }
+    }
 out:
     pgcb_faults(gmu,smmu,"before stop");
     if (released) {

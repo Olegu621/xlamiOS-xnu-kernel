@@ -10,8 +10,10 @@ static bool pgcb_request(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
 {
     uint32_t wire[255];
     *value = *error = UINT32_MAX;
-    if (!source || !count || count > 255 || *sequence >= 4095 ||
+    if (!source || !count || count > 255 || *sequence > 4095 ||
         ((source[0] >> 8) & 255) != count || (source[0] & 0xffff0000u)) return false;
+    /* One serialized outstanding command; the12-bit wire sequence wraps. */
+    if (*sequence == 4095) *sequence = 0;
     bcopy(source,wire,count * sizeof(uint32_t));
     wire[0] |= ++*sequence << 20;
     enum pg_hfi_status sent = pg_hfi_send(h,wire,count);

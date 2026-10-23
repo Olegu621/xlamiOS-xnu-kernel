@@ -110,7 +110,7 @@ static bool pggx_prepare(const ArmSmmu4KIo *io, vm_offset_t smmu)
     bcopy(sqe+4,pggx.sqe.cpu,66032);
     __asm__ volatile("dsb sy" ::: "memory");
     if (bcmp(sqe+4,pggx.sqe.cpu,66032)) return false;
-    pggx.config = (ArmSmmu4KConfig){32,36,pgcb.memory[8].physical,16384};
+    pggx.config = (ArmSmmu4KConfig){32,36,pgcb.memory[8].physical,81920};
     pggx.context.lower=&pggx.config; pggx.context.lower_tables=&pgrt.gpu_tables;
     pggx.context.asid=1; pggx.context.id0=pgcb_read(smmu,0x20); pggx.context.id2=pgcb_read(smmu,0x28);
     /* This boot's initial full-SMMU inventory proved all streams invalid.
@@ -276,7 +276,7 @@ static void pggx_stop(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
     if (pggx.routed) pgcb_write(smmu,0xc04,pggx.saved_s2cr);
 }
 static bool pggx_boot(struct pg_hfi *h, vm_offset_t gpu, vm_offset_t gmu, vm_offset_t smmu,
-    vm_offset_t cc, vm_offset_t rsc, const ArmSmmu4KIo *io, unsigned *sequence)
+    vm_offset_t cc, vm_offset_t rsc, const ArmSmmu4KIo *io, unsigned *sequence, bool retain)
 {
     if (!pgpu_collapsed(pgcb_read(cc,PGPU_GX_GDSCR))) return false;
     bool prepared=pggx_prepare(io,smmu);
@@ -318,6 +318,10 @@ static bool pggx_boot(struct pg_hfi *h, vm_offset_t gpu, vm_offset_t gmu, vm_off
                     pggx.completed,fence[0],fence[1]);
             }
         }
+    }
+    if (retain && pggx.completed) {
+        printf("PERIDOT GPU: verified engine retains CB0/OOB/SQE/ZAP until reset\n");
+        return true;
     }
     pggx_stop(h,gmu,smmu,cc,rsc,io,sequence);
     printf("PERIDOT GPU: session finished SQE=%u ZAP=%u memory-write=%u retained-until-reset=1\n",

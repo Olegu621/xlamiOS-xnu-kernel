@@ -5,6 +5,28 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0142 persistent engine and kernel BO/IB/fence API implemented
+
+- Mode21 retains actual OOB/GX/GMU clocks only after the proven CP/ZAP and
+  MEM_WRITE success. Parent power stage returns a distinct DRIVER_HELD result,
+  with truthful restoration flags. Static copies own/repoint GMU config,
+  table result, context, I/O, HFI and sequence; no stack pointers survive.
+- CPU16K/native GPU4K stay intact. GPU table pool4MiB covers bounded user VA
+ 50000000..b0000000. Up to1024 mapping leases/256MiB active backing; physical
+  pages supplied only by trusted kernel descriptors. First-fit VA reuse,
+  exact old-PTE validation, genuine idle/owned-context checks and ASID sync.
+- Every submission is serialized under the real engine lock, checks each IB
+  belongs to a live map, uses real HFI131 indirect buffers, then gen7
+  CACHE_CLEAN|BIT27 timestamp write and idle. Completion requires actual
+  observed GPU fence. HFI's12bit sequence wraps with one outstanding command.
+- Failed completion poisons the service and keeps active backing pinned.
+  Partial-map/uncertain TLBI errors panic before callers can release memory.
+- Public peridot_gpu.h API is for the following IOKit BO/IOSurface frontend;
+  no IOAccelerator service is advertised by this patch. Lifecycle is explicitly
+  retained until reset, with the existing required180s diagnostic timer.
+- Patch applicability checked against exact0141 files. Compilation, persistent
+  hardware behavior and runtime IB/fence path remain unverified.
+
 ### 0141 HARDWARE PASS: actual GPU command execution, ZAP and clean shutdown
 
 - Kernel CI40007360442 SUCCESS/508ad3f. ImageSHA256
