@@ -1,0 +1,174 @@
+--- a/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:04:59.147232849 +0300
++++ b/bsd/dev/sweet_gpu_power_peridot.h	2026-10-23 05:04:59.149192602 +0300
+@@ -783,6 +783,11 @@
+  * mux0x62024 (10-bit), divider0x62000, branch0x62004, XO/4 branch
+  * 0x62008, control0x62048, status0x6204c, GPUCC debug output selected by
+  * 0x17d; GPUCC debug mux0x9564 (8-bit), divider0x9140, branch0x9144.
++ * The GCC debug registers live in the GCC mapping (absolute 0x162000) and
++ * the GPUCC ones in the GPUCC mapping, so the measurement takes both io
++ * contexts; reading the GCC offsets through the GPUCC base is an
++ * unmapped access (the 0119 hardware run panicked that way before any
++ * register was written).
+  * Both debug dividers are programmed to their field value1, which
+  * divides by two each, so the counter sees a quarter of the measured
+  * clock and the reported rate is multiplied by4. A clock that does not
+@@ -828,38 +833,38 @@
+  * 200ms. The control register is left with CNT_EN cleared and the terminal
+  * count programmed; the caller restores its saved value. */
+ static inline bool
+-pgpu_measure_counter_run(const struct pgpu_power_io *io, uint32_t ticks,
++pgpu_measure_counter_run(const struct pgpu_power_io *gcc_io, uint32_t ticks,
+     uint32_t *count)
+ {
+-	uint32_t ctl = io->read(io->context, PGPU_GCC_MEASURE_CTL);
++	uint32_t ctl = gcc_io->read(gcc_io->context, PGPU_GCC_MEASURE_CTL);
+ 	if (ctl == UINT32_MAX) {
+ 		return false;
+ 	}
+ 	uint32_t base = ctl & ~(PGPU_MEASURE_CNT_EN | PGPU_MEASURE_CLR_CNT |
+ 	    PGPU_MEASURE_TERM);
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL, base);
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL,
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL, base);
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL,
+ 	    base | PGPU_MEASURE_CLR_CNT);
+-	io->delay_us(1);
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL,
++	gcc_io->delay_us(1);
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL,
+ 	    base | (ticks & PGPU_MEASURE_TERM));
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL,
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL,
+ 	    base | (ticks & PGPU_MEASURE_TERM) | PGPU_MEASURE_CNT_EN);
+ 	for (unsigned i = 0; i < 2000; ++i) {
+-		uint32_t status = io->read(io->context,
++		uint32_t status = gcc_io->read(gcc_io->context,
+ 		    PGPU_GCC_MEASURE_STATUS);
+ 		if (status == UINT32_MAX) {
+ 			break;
+ 		}
+ 		if (status & PGPU_MEASURE_DONE) {
+-			io->write(io->context, PGPU_GCC_MEASURE_CTL,
++			gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL,
+ 			    base | (ticks & PGPU_MEASURE_TERM));
+ 			*count = status & PGPU_MEASURE_COUNT;
+ 			return true;
+ 		}
+-		io->delay_us(100);
++		gcc_io->delay_us(100);
+ 	}
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL,
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL,
+ 	    base | (ticks & PGPU_MEASURE_TERM));
+ 	return false;
+ }
+@@ -868,14 +873,14 @@
+  * counter does not finish or a register is unreadable. Every debug
+  * register is restored before returning. */
+ static inline bool
+-pgpu_measure_clock(const struct pgpu_power_io *io, unsigned sel,
+-    uint32_t *hz)
++pgpu_measure_clock(const struct pgpu_power_io *io,
++    const struct pgpu_power_io *gcc_io, unsigned sel, uint32_t *hz)
+ {
+-	uint32_t gcc_mux = io->read(io->context, PGPU_GCC_DEBUG_MUX);
+-	uint32_t gcc_div = io->read(io->context, PGPU_GCC_DEBUG_DIV);
+-	uint32_t gcc_cbcr = io->read(io->context, PGPU_GCC_DEBUG_CBCR);
+-	uint32_t xo = io->read(io->context, PGPU_GCC_XO_DIV4_CBCR);
+-	uint32_t ctl = io->read(io->context, PGPU_GCC_MEASURE_CTL);
++	uint32_t gcc_mux = gcc_io->read(gcc_io->context, PGPU_GCC_DEBUG_MUX);
++	uint32_t gcc_div = gcc_io->read(gcc_io->context, PGPU_GCC_DEBUG_DIV);
++	uint32_t gcc_cbcr = gcc_io->read(gcc_io->context, PGPU_GCC_DEBUG_CBCR);
++	uint32_t xo = gcc_io->read(gcc_io->context, PGPU_GCC_XO_DIV4_CBCR);
++	uint32_t ctl = gcc_io->read(gcc_io->context, PGPU_GCC_MEASURE_CTL);
+ 	uint32_t gpu_mux = io->read(io->context, PGPU_GPUCC_DEBUG_MUX);
+ 	uint32_t gpu_div = io->read(io->context, PGPU_GPUCC_DEBUG_DIV);
+ 	uint32_t gpu_cbcr = io->read(io->context, PGPU_GPUCC_DEBUG_CBCR);
+@@ -885,29 +890,29 @@
+ 	    gpu_cbcr == UINT32_MAX) {
+ 		return false;
+ 	}
+-	io->write(io->context, PGPU_GCC_DEBUG_DIV,
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_DIV,
+ 	    (gcc_div & ~PGPU_DEBUG_DIV_MASK) | PGPU_DEBUG_DIV_FIELD);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_DIV,
+ 	    (gpu_div & ~PGPU_DEBUG_DIV_MASK) | PGPU_DEBUG_DIV_FIELD);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_MUX,
+ 	    (gpu_mux & ~PGPU_DEBUG_MUX_MASK) | (sel & PGPU_DEBUG_MUX_MASK));
+-	io->write(io->context, PGPU_GCC_DEBUG_MUX,
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_MUX,
+ 	    (gcc_mux & ~PGPU_GCC_DEBUG_MUX_MASK) | PGPU_GCC_DEBUG_SEL_GPUCC);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_CBCR, gpu_cbcr | 1u);
+-	io->write(io->context, PGPU_GCC_DEBUG_CBCR, gcc_cbcr | 1u);
+-	io->write(io->context, PGPU_GCC_XO_DIV4_CBCR, xo | 1u);
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_CBCR, gcc_cbcr | 1u);
++	gcc_io->write(gcc_io->context, PGPU_GCC_XO_DIV4_CBCR, xo | 1u);
+ 	io->delay_us(PGPU_MEASURE_SETTLE_US);
+ 	uint32_t brief = 0, full = 0;
+-	bool ok = pgpu_measure_counter_run(io, PGPU_MEASURE_BRIEF, &brief) &&
+-	    pgpu_measure_counter_run(io, PGPU_MEASURE_FULL, &full);
+-	io->write(io->context, PGPU_GCC_XO_DIV4_CBCR, xo);
+-	io->write(io->context, PGPU_GCC_DEBUG_CBCR, gcc_cbcr);
++	bool ok = pgpu_measure_counter_run(gcc_io, PGPU_MEASURE_BRIEF, &brief) &&
++	    pgpu_measure_counter_run(gcc_io, PGPU_MEASURE_FULL, &full);
++	gcc_io->write(gcc_io->context, PGPU_GCC_XO_DIV4_CBCR, xo);
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_CBCR, gcc_cbcr);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_CBCR, gpu_cbcr);
+-	io->write(io->context, PGPU_GCC_DEBUG_MUX, gcc_mux);
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_MUX, gcc_mux);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_MUX, gpu_mux);
+ 	io->write(io->context, PGPU_GPUCC_DEBUG_DIV, gpu_div);
+-	io->write(io->context, PGPU_GCC_DEBUG_DIV, gcc_div);
+-	io->write(io->context, PGPU_GCC_MEASURE_CTL, ctl);
++	gcc_io->write(gcc_io->context, PGPU_GCC_DEBUG_DIV, gcc_div);
++	gcc_io->write(gcc_io->context, PGPU_GCC_MEASURE_CTL, ctl);
+ 	if (!ok) {
+ 		return false;
+ 	}
+@@ -931,9 +936,10 @@
+  */
+ static inline enum pgpu_clock_result
+ pgpu_cx_clock_measure_stage(const struct pgpu_power_io *io,
+-    const unsigned *sels, unsigned count, uint32_t *handoff_hz,
+-    uint32_t *live_hz, struct pgpu_measure_probe *probe,
+-    uint32_t *cx_final, uint32_t *gx_final)
++    const struct pgpu_power_io *gcc_io, const unsigned *sels,
++    unsigned count, uint32_t *handoff_hz, uint32_t *live_hz,
++    struct pgpu_measure_probe *probe, uint32_t *cx_final,
++    uint32_t *gx_final)
+ {
+ 	uint32_t cx = io->read(io->context, PGPU_CX_GDSCR);
+ 	uint32_t hw = io->read(io->context, PGPU_CX_HW);
+@@ -944,7 +950,7 @@
+ 	}
+ 	probe->counter_ok = true;
+ 	for (unsigned i = 0; i < count; ++i) {
+-		if (!pgpu_measure_clock(io, sels[i], &handoff_hz[i])) {
++		if (!pgpu_measure_clock(io, gcc_io, sels[i], &handoff_hz[i])) {
+ 			probe->counter_ok = false;
+ 			break;
+ 		}
+@@ -960,7 +966,7 @@
+ 	}
+ 	if (probe->cx_powered && probe->counter_ok) {
+ 		for (unsigned i = 0; i < count; ++i) {
+-			if (!pgpu_measure_clock(io, sels[i], &live_hz[i])) {
++			if (!pgpu_measure_clock(io, gcc_io, sels[i], &live_hz[i])) {
+ 				probe->counter_ok = false;
+ 				break;
+ 			}
+--- a/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:04:59.148192613 +0300
++++ b/bsd/dev/sweet_gpu_peridot.c	2026-10-23 05:04:59.149192602 +0300
+@@ -309,10 +309,11 @@
+ 		printf("PERIDOT GPU: clock measurement: %u GPUCC clocks through the GCC debug counter, CX off then live\n",
+ 		    (unsigned)N);
+ 		struct pgpu_power_io io = { (void *)cc, pgpu_power_read, pgpu_power_write, delay };
++		struct pgpu_power_io gcc_io = { (void *)gcc, pgpu_power_read, pgpu_power_write, delay };
+ 		struct pgpu_measure_probe probe = { 0 };
+ 		uint32_t cx_out = 0, gx_out = 0;
+ 		enum pgpu_clock_result result = pgpu_cx_clock_measure_stage(&io,
+-		    sels, N, handoff, live, &probe, &cx_out, &gx_out);
++		    &gcc_io, sels, N, handoff, live, &probe, &cx_out, &gx_out);
+ 		for (unsigned i = 0; i < N; ++i) {
+ 			printf("PERIDOT GPU: MEAS %s sel=%#x handoff=%u live=%u\n",
+ 			    clock_names[i], sels[i], handoff[i], live[i]);
