@@ -85,3 +85,21 @@ execution and HFI communication. FSR0x400 denotes FORMAT2 with no fault flags;
 FAR/FSYNR must not be interpreted in that state. Reset, bus halt and context
 shutdown completed and recovery returned automatically. GPU command execution
 and accelerated iOS rendering remain required.
+
+### 0137 power-table exchange and ACK contract
+
+[CI39983756607](https://github.com/Olegu621/xlamiOS-xnu-kernel/actions/runs/39983756607)
+built successfully. The temporary image repeated the real GMU startup and
+GET_VALUE125 response, then published the actual49-word PERF packet. Firmware
+returned a three-word ACK echoing request0x20310f. The host had incorrectly
+required four words for every request and stopped before logging its result;
+the PERF result is therefore not established by this capture. BW, features
+and core start were not reached. GX stayed collapsed (GDSCR0x22f801), reset,
+bus drain and context disable/synchronization succeeded, and recovery returned.
+
+The primary KGSL gen7_hfi_send_generic_req accepts original generic replies
+with result in word2, while gen7_hfi_send_generic_req_v5 checks word3 for
+feature/value firmware errors on this HFI version. The0138 correction selects
+the contract per command, retains exact request matching and result checks,
+and logs response length/result. START/memory requests and GPU submissions
+remain separate unfinished driver phases.

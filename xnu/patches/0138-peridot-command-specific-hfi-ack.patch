@@ -1,0 +1,87 @@
+--- a/bsd/dev/peridot_gmu_coldboot.c
++++ b/bsd/dev/peridot_gmu_coldboot.c
+@@ -213,8 +213,11 @@
+             printf("PERIDOT GMU: HFI reply words=%lu header=%#x request=%#x value=%#x\n",
+                 (unsigned long)words, packet[0], words > 1 ? packet[1] : 0,
+                 words > 2 ? packet[2] : 0);
+-            if (words >= 3 && ((packet[0] >> 16) & 15) == 1 &&
+-                packet[1] == command[0]) return true;
++            if (words >= 4 && ((packet[0] >> 16) & 15) == 1 &&
++                (packet[0] & 255) == 12 && packet[1] == command[0]) {
++                printf("PERIDOT GMU: GET_VALUE125 firmware-error=%u\n",packet[3]);
++                return packet[3] == 0;
++            }
+         } else if (status != PG_HFI_EMPTY) {
+             printf("PERIDOT GMU: response queue failed=%u\n", status); return false;
+         }
+--- a/bsd/dev/peridot_hwsched_prepare.c
++++ b/bsd/dev/peridot_hwsched_prepare.c
+@@ -6,7 +6,7 @@
+ 
+ static bool pgcb_request(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu,
+     const uint32_t *source, size_t count, unsigned *sequence,
+-    bool zero_result, uint32_t *value, uint32_t *error)
++    bool zero_result, bool v5_error, uint32_t *value, uint32_t *error)
+ {
+     uint32_t wire[255];
+     *value = *error = UINT32_MAX;
+@@ -25,14 +25,18 @@
+         if (status == PG_HFI_OK) {
+             if (++messages > 64) return false;
+             if (((packet[0] >> 16) & 15) == 1) {
+-                if (words < 4 || packet[1] != wire[0]) {
++                if (words < (v5_error ? 4u : 3u) || packet[1] != wire[0] ||
++                    (packet[0] & 255) != (wire[0] & 255)) {
+                     printf("PERIDOT HWSCHED: ACK mismatch words=%lu expected=%#x received=%#x\n",
+                         (unsigned long)words,wire[0],words > 1 ? packet[1] : 0);
+                     return false;
+                 }
+-                *value = packet[2]; *error = packet[3];
+-                printf("PERIDOT HWSCHED: ACK command=%u result=%#x error=%u\n",
+-                    wire[0] & 255,*value,*error);
++                /* KGSL uses the original three-word ACK for PERF/BW and
++                 * CORE_FW_START. Only its v5 feature/value API requires
++                 * the separate error field, even on HFI2.6 firmware. */
++                *value = packet[2]; *error = v5_error ? packet[3] : 0;
++                printf("PERIDOT HWSCHED: ACK command=%u words=%lu v5=%u result=%#x error=%u\n",
++                    wire[0] & 255,(unsigned long)words,v5_error,*value,*error);
+                 return !*error && (!zero_result || !*value);
+             }
+             printf("PERIDOT HWSCHED: asynchronous message id=%u words=%lu data=%#x/%#x\n",
+@@ -69,10 +73,10 @@
+     }
+     printf("PERIDOT HWSCHED: prepare actual peridot PERF49/BW160, HFI2.6.1\n");
+     if (!pgcb_request(h,gmu,smmu,pgcb_performance,
+-        sizeof(pgcb_performance)/sizeof(pgcb_performance[0]),&sequence,true,&value,&error)) return false;
++        sizeof(pgcb_performance)/sizeof(pgcb_performance[0]),&sequence,true,false,&value,&error)) return false;
+     ++acknowledged;
+     if (!pgcb_request(h,gmu,smmu,pgcb_bandwidth,
+-        sizeof(pgcb_bandwidth)/sizeof(pgcb_bandwidth[0]),&sequence,true,&value,&error)) return false;
++        sizeof(pgcb_bandwidth)/sizeof(pgcb_bandwidth[0]),&sequence,true,false,&value,&error)) return false;
+     ++acknowledged;
+     /* GX OOB, CP/SQE/ZAP and the memory-request phase follow separately.
+      * Keep IFPC off until that driver owns GX power and its idle protocol. */
+@@ -83,7 +87,7 @@
+         {11u | (4u<<8),27,1,0},
+     };
+     for (unsigned i = 0; i < sizeof(features)/sizeof(features[0]); ++i) {
+-        bool ok = pgcb_request(h,gmu,smmu,features[i],4,&sequence,true,&value,&error);
++        bool ok = pgcb_request(h,gmu,smmu,features[i],4,&sequence,true,true,&value,&error);
+         if (!ok && features[i][1] == 27 && error == 8) {
+             printf("PERIDOT HWSCHED: DMS unavailable, matching KGSL optional-feature fallback\n");
+             continue;
+@@ -92,12 +96,12 @@
+         ++acknowledged;
+     }
+     const uint32_t core_start[] = {14u | (2u<<8),0};
+-    if (!pgcb_request(h,gmu,smmu,core_start,2,&sequence,true,&value,&error)) return false;
++    if (!pgcb_request(h,gmu,smmu,core_start,2,&sequence,true,false,&value,&error)) return false;
+     ++acknowledged;
+     const uint32_t properties[] = {121,122};
+     for (unsigned i = 0; i < sizeof(properties)/sizeof(properties[0]); ++i) {
+         uint32_t query[] = {12u | (3u<<8),properties[i],0};
+-        if (!pgcb_request(h,gmu,smmu,query,3,&sequence,false,&value,&error)) return false;
++        if (!pgcb_request(h,gmu,smmu,query,3,&sequence,false,true,&value,&error)) return false;
+         printf("PERIDOT HWSCHED: capability=%u value=%#x\n",properties[i],value);
+         ++acknowledged;
+     }

@@ -213,8 +213,11 @@ static bool pgcb_exchange(struct pg_hfi *h, vm_offset_t gmu, vm_offset_t smmu)
             printf("PERIDOT GMU: HFI reply words=%lu header=%#x request=%#x value=%#x\n",
                 (unsigned long)words, packet[0], words > 1 ? packet[1] : 0,
                 words > 2 ? packet[2] : 0);
-            if (words >= 3 && ((packet[0] >> 16) & 15) == 1 &&
-                packet[1] == command[0]) return true;
+            if (words >= 4 && ((packet[0] >> 16) & 15) == 1 &&
+                (packet[0] & 255) == 12 && packet[1] == command[0]) {
+                printf("PERIDOT GMU: GET_VALUE125 firmware-error=%u\n",packet[3]);
+                return packet[3] == 0;
+            }
         } else if (status != PG_HFI_EMPTY) {
             printf("PERIDOT GMU: response queue failed=%u\n", status); return false;
         }

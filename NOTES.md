@@ -4,7 +4,24 @@
 
 ## Active handoff (peridot, 2026-10-22, Codex continuation)
 
-### 0137 HWSCHED configuration/core preparation (implementation ready)
+### 0137 device result; 0138 per-command ACK format correction
+
+- CI39983756607 SUCCESS/a3b19f9. ImageSHA256
+  f297c54f5d883cd56bfc63f969dff79863d79f3189da7bab6e7cf62fad1af0d9.
+  cycle0137 automatically returned to recovery and captured the console.
+- Proven GMU startup/GET_VALUE125 repeated. PERF49 opcode15 received an
+  actual three-word ACK echoing request0x20310f. The host incorrectly required
+  four words for every command and stopped before reading its result value.
+  No BW/feature/core commands were sent. This is not a proven PERF success.
+- GX remained collapsed (GDSCR0x22f801). Reset, bus drain, context disable and
+  TLB synchronization completed; no panic. Ordinary iOS userland continued.
+- Primary KGSL source distinguishes original generic requests (PERF/BW/core,
+  result in word2) from v5 feature/value requests (word3 is firmware error).
+  0138 now applies this contract per command and logs the actual ACK length.
+  Baseline GET_VALUE125 now also requires/checks its existing fourth word.
+- 0138 compilation and device ACK values pending. No START10/GPU commands yet.
+
+### 0137 HWSCHED configuration/core preparation (implementation)
 
 - Mode18 retains the proven0136 cold boot/GET_VALUE ACK, then submits actual
   peridot HFI2.6.1 PERF49 and BW160 packets, IFPC-disable, HWSCHED/KPROF/DMS
