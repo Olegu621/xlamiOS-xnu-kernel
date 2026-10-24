@@ -5,6 +5,59 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0164 native refresh contract + rendering diagnosis prepared (2026-10-25)
+
+- Publish native IOMFBDisplayRefresh dictionary before registerService: integer
+  displayMinRefreshInterval (32.32 seconds) and displayRefreshStepMachTime
+  (actual mach ticks). Exact20H392 getter consumes CFNumber int32; no native
+  refresh getter overrides. Metadata allocation precedes framebuffer resources.
+- Read-only opt-in peridotdisplayprobe: selected liveFDT n16t42 DSI0 ae94000/1000,
+  INTF1 ae36000/300, scalar MMIO reads only. Sample hardware frame counter over
+  200ms and log DSI timing. No timing or DDIC register writes.
+- Opt-in peridotgpuprof measures existing validation/cache-pre/native-submit/
+  cache-post without changing commands or ownership. Log sums every10s per
+  client; cache_bytes_each_pass is volume per pass, with two existing passes.
+- Enable pinned upstream separate-thread GLES selftest only in backboardd;
+  clear/triangle/readback distinguish basic GPU correctness from composition.
+  New display_probe.c reads guarded native UIScreen/CADisplay getters once on
+  the existing SpringBoard main-queue callback after60s. CADisplay getters return
+  interval seconds; log reciprocal Hz. No constructor-time display IPC.
+- Exact two-file patch apply check passes. Python AST and8 pinned frontend edit
+  anchors pass. Native ARM64 heartbeat calculation6/6 cases pass with environment
+  query stubbed; property transport/hardware excluded. Independent final review
+  found no blocker. Target compile/link and fresh hardware run still required;
+  no local target LSP is available. Preserve8CPU/120software/reset210/shot190.
+
+### 0163 combined uncapped software pacing + deferred SDR image hardware result
+
+-642c072feea637073ce02246d75a262edaf4c5da Mesa CI40114966245 SUCCESS. Library
+ 15,235,984 B SHA21b2ad1c48351bb26f45f48051e3f37ffc3f7b5d5f343537667e6df70a3a77e9;
+  all4 source module hashes match target manifest. Kernel16217,388,136 B SHA
+  eacf5b64f34082ddc3833b809f9223cf701f1f86a752652c0690322d2b3fdbd8.
+- Image33,173,504 B SHA804d1343afb7379f91b5b7146b020286f377bd82187bf53783d99eb479fe2658.
+  CPU8/sweetfb_hz0/sweetfb_vsync120/reset210/panic210/shot190/trace1 verified.
+  Fresh console SHA5d39eee2304da8898a41907ba81acd6e65d628d50d6f852194e86229b3cfbfe3;
+  changed from161 and currentargs verified. Auto recovery279.016s,8/8CPU/SGI.
+- Capture adapter installed/protection restored,4 actual XR->SDR redirects;
+  no formatfailed or drawing GL506 logs. GPU completion last logged fence10474.
+  UI remains damaged, confirmed by user. User first reported smoother motion,
+  then clarified it still feels near15FPS. Screenshot identical to160/161 despite
+  fresh logs; unchanged pixels do not establish a stale capture or fix.
+- Idle callbacks600/5000ms (~120/s), active swaps commonly55-78 per5s (~11-16/s),
+  one window300 swaps/5009ms and297 nonempty copies (~59/s). Copy3-7ms typical,
+  max~10ms. Existing glFinish wall time averages39-55ms in slow windows vs11ms
+  in one53flushes/s window. It includes driver/cache/GPU time, not pureGPUtime.
+  Software pacing alone cannot deliver120 complete physical frames persecond.
+- Compiled162ARM64 armVsync90/90cases pass:phase/latework/latelog/report reset,
+  clock/timer/locks/log stubbed. CompiledMesa163wrapper9/9cases pass: original
+  args preserved once, SDR redirect only newXR/nonfloat, cached/float/layout
+  preserved. NativeQuartzCore format selection16/16pass with allocatorstub.
+  VM installation/image construction/rendering remain hardware requirements.
+- Recovery actualhw_vsync_info60.263Hz/16593834ns; dynamic_fps60. Modesinclude120.
+  This measures RECOVERY, notABL->XNU handoff. Exactmanufacturerpanel DT uses
+  immediateVFP DFPS + DDICgamma command; no physical120claim fromsoftwareclock.
+  Nextread-onlyprobe afterreturn:liveFDT and source-based DSI/SDE timing/counter.
+
 ### 0162 target build success;0163 deferred capture SDR adapter prepared
 
 -0162 commit30cf434343b728897bf4723e961b259a50a1e51d, XNU CI40114262727 SUCCESS.

@@ -1,0 +1,195 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -48,9 +48,54 @@
+ #include <IOKit/IOWorkLoop.h>
+ #include <IOKit/IOTimerEventSource.h>
+ #include <IOKit/system.h>
++#include <IOKit/IOMemoryDescriptor.h>
++#include <libkern/c++/OSDictionary.h>
++#include <libkern/c++/OSNumber.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/clock.h>
+ #include <sys/proc.h>
++
++/* Opt-in read-only measurement of the exact selected n16t42 panel handoff.
++ * Live FDT: DSI0 ae94000/1000, its mdp_intf_base ae36000/300.
++ * Offsets match Qualcomm dsi_ctrl_reg.h and sde_hw_intf.c. */
++static uint32_t
++sweet_fb_mmio_read(uintptr_t base, uint32_t offset)
++{
++	uint32_t value;
++	__asm__ volatile("ldr %w0, [%1]" : "=r"(value) : "r"(base + offset) : "memory");
++	return value;
++}
++
++static void
++sweet_fb_panel_probe(void)
++{
++	IOMemoryDescriptor *dsi = IOMemoryDescriptor::withPhysicalAddress(0xae94000, 0x1000, kIODirectionInOut);
++	IOMemoryDescriptor *intf = IOMemoryDescriptor::withPhysicalAddress(0xae36000, 0x300, kIODirectionInOut);
++	IOMemoryMap *dm = dsi ? dsi->map(kIOMapReadOnly | kIOMapInhibitCache) : NULL;
++	IOMemoryMap *im = intf ? intf->map(kIOMapReadOnly | kIOMapInhibitCache) : NULL;
++	if (dm && im) {
++		uintptr_t d = dm->getVirtualAddress(), i = im->getVirtualAddress();
++		uint32_t control = sweet_fb_mmio_read(d, 0x04);
++		uint32_t active = sweet_fb_mmio_read(d, 0x28);
++		uint32_t total = sweet_fb_mmio_read(d, 0x2c);
++		uint32_t compression = sweet_fb_mmio_read(d, 0x2a0);
++		uint32_t enabled = sweet_fb_mmio_read(i, 0x00);
++		uint32_t first = sweet_fb_mmio_read(i, 0xac);
++		uint64_t begin = mach_absolute_time();
++		IOSleep(200);
++		uint32_t last = sweet_fb_mmio_read(i, 0xac);
++		uint64_t elapsed;
++		absolutetime_to_nanoseconds(mach_absolute_time() - begin, &elapsed);
++		uint32_t frames = last - first;
++		IOLog("PERIDOT PANEL RO: DSI0 ctrl=0x%x active_v=0x%x total=0x%x compression=0x%x INTF1 enable=0x%x frames=%u/%u delta=%u elapsed_ns=%llu rate_mHz=%llu\n",
++		    control, active, total, compression, enabled, first, last, frames, elapsed,
++		    elapsed && frames <= 1000 ? (uint64_t)frames * 1000000000000ULL / elapsed : 0ULL);
++	} else {
++		IOLog("PERIDOT PANEL RO: mapping unavailable, no register access performed\n");
++	}
++	OSSafeReleaseNULL(dm); OSSafeReleaseNULL(im);
++	OSSafeReleaseNULL(dsi); OSSafeReleaseNULL(intf);
++}
+ 
+ enum {
+ 	kSweetFBGetLayerDefaultSurface  = 3,
+@@ -177,6 +222,30 @@
+ 		IOLog("SWEET FB: no boot framebuffer\n");
+ 		return false;
+ 	}
++	uint32_t panelProbe = 0;
++	PE_parse_boot_argn("peridotdisplayprobe", &panelProbe, sizeof(panelProbe));
++	if (panelProbe == 1 && fWidth == 1220 && fHeight == 2712) sweet_fb_panel_probe();
++	fVsyncHz = 60;
++	PE_parse_boot_argn("sweetfb_vsync", &fVsyncHz, sizeof(fVsyncHz));
++	if (fVsyncHz < 30 || fVsyncHz > 120) fVsyncHz = 60;
++	clock_interval_to_absolutetime_interval(1, NSEC_PER_SEC / fVsyncHz, &fVsyncPeriod);
++	if (!fVsyncPeriod) return false;
++	/* Exact20H392 reads CFNumber int values. Min interval is32.32 seconds;
++	 * step is mach_absolute_time ticks. Publish before registerService. */
++	OSDictionary *refresh = OSDictionary::withCapacity(2);
++	OSNumber *minimum = OSNumber::withNumber((1ULL << 32) / fVsyncHz, 32);
++	OSNumber *step = fVsyncPeriod <= 0x7fffffffULL ? OSNumber::withNumber(fVsyncPeriod, 32) : NULL;
++	bool refreshOK = refresh && minimum && step &&
++	    refresh->setObject("displayMinRefreshInterval", minimum) &&
++	    refresh->setObject("displayRefreshStepMachTime", step) &&
++	    setProperty("IOMFBDisplayRefresh", refresh);
++	OSSafeReleaseNULL(minimum); OSSafeReleaseNULL(step); OSSafeReleaseNULL(refresh);
++	if (!refreshOK) {
++		IOLog("SWEET FB: refresh metadata allocation/publication failed\n");
++		return false;
++	}
++	IOLog("SWEET FB: native refresh metadata min32.32=%u step_ticks=%llu logical_hz=%u\n",
++	    (uint32_t)((1ULL << 32) / fVsyncHz), fVsyncPeriod, fVsyncHz);
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = fWidth;
+@@ -226,11 +295,6 @@
+ 		}
+ 		return false;
+ 	}
+-	fVsyncHz = 60;
+-	PE_parse_boot_argn("sweetfb_vsync", &fVsyncHz, sizeof(fVsyncHz));
+-	if (fVsyncHz < 30 || fVsyncHz > 120) fVsyncHz = 60;
+-	clock_interval_to_absolutetime_interval(1, NSEC_PER_SEC / fVsyncHz, &fVsyncPeriod);
+-	if (!fVsyncPeriod) return false;
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+ 	/* Zero means every fresh frame; an optional lower cap rounds down. */
+--- a/iokit/Kernel/arm/PeridotGPU.cpp
++++ b/iokit/Kernel/arm/PeridotGPU.cpp
+@@ -11,6 +11,7 @@
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <IOKit/IOKitKeys.h>
+ #include <kern/task.h>
++#include <kern/clock.h>
+ #include <pexpert/pexpert.h>
+ #include <sys/errno.h>
+ #include "SweetSurface.h"
+@@ -46,6 +47,11 @@
+     return true;
+ }
+ 
++struct pg_submit_profile {
++    uint64_t start, batches, ibs, bos, cacheBytes;
++    uint64_t validation, pre, engine, post, maxEngine;
++};
++
+ class PeridotGPUUserClient : public IOUserClient {
+     OSDeclareDefaultStructors(PeridotGPUUserClient);
+     task_t fTask;
+@@ -54,6 +60,8 @@
+     uint64_t fBytes;
+     uint32_t fLastSequence;
+     bool fClosing;
++    bool fProfileEnabled;
++    pg_submit_profile fProfile;
+     pg_client_bo *bo(uint64_t handle);
+     pg_client_bo *vacant(uint32_t *handle);
+     bool releaseBo(pg_client_bo *entry);
+@@ -72,6 +80,10 @@
+ bool PeridotGPUUserClient::initWithTask(task_t task,void *security,UInt32 type)
+ {
+     fTask=TASK_NULL;fLock=NULL;fBos=NULL;fBytes=0;fLastSequence=0;fClosing=false;
++    uint32_t profile=0;
++    PE_parse_boot_argn("peridotgpuprof",&profile,sizeof(profile));
++    fProfileEnabled=profile==1;
++    bzero(&fProfile,sizeof(fProfile));
+     if (type || !IOUserClient::initWithTask(task,security,type)) return false;
+     fTask=task;task_reference(fTask);
+     fLock=IOLockAlloc();
+@@ -200,6 +212,7 @@
+ }
+ IOReturn PeridotGPUUserClient::submit(const void *input,size_t bytes,uint64_t *out)
+ {
++    uint64_t started=fProfileEnabled ? mach_absolute_time() : 0;
+     uint32_t header[2];
+     if (!input || bytes<sizeof(header)) return kIOReturnBadArgument;
+     bcopy(input,header,sizeof(header));
+@@ -220,9 +233,12 @@
+         }
+         if (!owned) return kIOReturnNotPermitted;
+     }
++    uint64_t validated=fProfileEnabled ? mach_absolute_time() : 0;
+     for (unsigned i=0;i<num_bos;++i) clean(bo(handles[i]));
++    uint64_t prepared=fProfileEnabled ? mach_absolute_time() : 0;
+     uint32_t sequence=0;
+     int status=peridot_gpu_submit(ibs,num_ibs,&sequence);
++    uint64_t executed=fProfileEnabled ? mach_absolute_time() : 0;
+     if (status) return status==EINVAL ? kIOReturnBadArgument : kIOReturnNotReady;
+     /* The native submit has waited for each real GPU-written chunk fence.
+      * Return ownership to CPU aliases only after that completion. The
+@@ -236,6 +252,31 @@
+     static unsigned published;
+     if (published++<4) IOLog("PERIDOT GPU: completed fence=%u returned %u BOs to CPU ownership\n",
+         sequence,num_bos);
++    if (fProfileEnabled) {
++        uint64_t done=mach_absolute_time();
++        if (!fProfile.start) fProfile.start=started;
++        ++fProfile.batches; fProfile.ibs+=num_ibs; fProfile.bos+=num_bos;
++        for (unsigned i=0;i<num_bos;++i) fProfile.cacheBytes+=(uint64_t)bo(handles[i])->count*PAGE_SIZE;
++        fProfile.validation+=validated-started;
++        fProfile.pre+=prepared-validated;
++        fProfile.engine+=executed-prepared;
++        fProfile.post+=done-executed;
++        if (executed-prepared>fProfile.maxEngine) fProfile.maxEngine=executed-prepared;
++        uint64_t span;
++        absolutetime_to_nanoseconds(done-fProfile.start,&span);
++        if (span>=10ULL*NSEC_PER_SEC) {
++            uint64_t validation,pre,engine,post,maximum,n=fProfile.batches;
++            absolutetime_to_nanoseconds(fProfile.validation,&validation);
++            absolutetime_to_nanoseconds(fProfile.pre,&pre);
++            absolutetime_to_nanoseconds(fProfile.engine,&engine);
++            absolutetime_to_nanoseconds(fProfile.post,&post);
++            absolutetime_to_nanoseconds(fProfile.maxEngine,&maximum);
++            IOLog("PERIDOT SUBMIT PROFILE: batches=%llu IBs=%llu BOs=%llu cache_bytes_each_pass=%llu avg_validate_us=%llu avg_pre_us=%llu avg_engine_us=%llu avg_post_us=%llu max_engine_us=%llu\n",
++                n,fProfile.ibs,fProfile.bos,fProfile.cacheBytes,validation/1000/n,
++                pre/1000/n,engine/1000/n,post/1000/n,maximum/1000);
++            bzero(&fProfile,sizeof(fProfile));fProfile.start=done;
++        }
++    }
+     fLastSequence=sequence;*out=sequence;
+     return kIOReturnSuccess;
+ }

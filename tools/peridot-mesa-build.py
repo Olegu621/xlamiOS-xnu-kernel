@@ -158,6 +158,17 @@ def main():
     edit(front / 'sweetgl.c', 'sweetgl_load(void)\n{',
          'sweetgl_load(void)\n{\n\tperidot_surface_caps_install();\n'
          '\tperidot_surface_formats_install();\n\tperidot_surface_capture_install();')
+    display_probe = Path(__file__).resolve().parent / 'peridot-mesa/display_probe.c'
+    display_probe_source = display_probe.read_bytes()
+    (front / 'peridot_display_probe.c').write_bytes(display_probe_source)
+    provenance['display_probe_sha256'] = hashlib.sha256(display_probe_source).hexdigest()
+    edit(front / 'sweetgl.c', '\tconst char *t = getenv("SWEETGL_TEST");',
+         '\tif (!strcmp(getprogname(), "backboardd")) setenv("SWEETGL_TEST", "1", 1);\n'
+         '\tconst char *t = getenv("SWEETGL_TEST");')
+    edit(front / 'layerdump.c', '#include \"sweet_drm.h\"', '#include \"sweet_drm.h\"\nvoid peridot_display_probe(void);')
+    edit(front / 'layerdump.c', '\tstatic int round;\n', '\tstatic int round;\n\tif (round == 0) peridot_display_probe();\n')
+    provenance['layerdump_probe_sha256'] = hashlib.sha256((front / 'layerdump.c').read_bytes()).hexdigest()
+    provenance['selftest_enabled_for'] = 'backboardd'
     edit(front / 'eagl.c', '#include "eagl.h"',
          '#include "eagl.h"\nvoid peridot_texture_functions_install(void);')
     # Replace the old restore's table addresses with our exact20H392 guarded
@@ -274,7 +285,7 @@ def main():
     objects = []
     for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
                  'peridot_surface_caps', 'peridot_texture_functions', 'peridot_surface_formats',
-                 'peridot_surface_capture']:
+                 'peridot_surface_capture', 'peridot_display_probe']:
         source = (work if name == 'dispatch' else front) / f'{name}.c'
         obj = work / f'{name}.o'
         run([clang] + common + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
@@ -289,7 +300,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0163-native-deferred-capture-sdr'
+    provenance['frontend_revision'] = 'peridot-0164-native-refresh-render-probe'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout
