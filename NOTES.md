@@ -4,6 +4,28 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0148 candidate: use the dispatch_once_f completion contract
+
+-0147 completed its automatic180s reset and returned to recovery. Host USB
+  reappearance was delayed; there is NO evidence of a hard hang. Panel shot
+ 160 remains black/power1. More than896 real raw requests complete, including
+  multi-chunk logical submissions. The previous45-word ACK3 failure is gone.
+- Native CIF10 hook reached exact-cache/data guards but refused with
+  unexpected native state. The compound check did not log whether boolean
+  or predicate was unexpected; do not claim the exact runtime encoding yet.
+- Apple libdispatch once.c allows quiescent-generation encodings after
+  completion.0148 relies on the actual synchronous dispatch_once_f contract,
+  keeps the native boolean0/1 guard, and logs both value and opaque predicate.
+  ExactUUID/instruction/data-region guards remain. Actual BGRA selection and
+  usable accelerated pixels are still unproven. Reuse0147 kernel.
+- Kernel CI40041887330/d585842 SUCCESS. Mesa CI40042586308/8ed1796 SUCCESS.
+ 0147 imageSHAbe9e09aa016c691c3242692d6444b196c385dada7d858d0a9ed6972b0bb68f9c.
+  LibrarySHA98a52c4725a813f8ee7dfb02495275f45a8e219b0d6e1a1d8582ae749f8d27b0.
+  ConsoleSHA316defd6b9fa17312b8ef8c1032dcbb838a76b40aecabf7f8c901d30ba3e2bdb.
+  User saw logs/frozen screen. No compositor crash or engine poison observed.
+- KEEP sweetdiagreset180 / capture160. No permanent flash. Sources for once
+  semantics: https://github.com/apple-oss-distributions/libdispatch/blob/main/src/once.c
+
 ### 0147 kernel ready; Mesa SDK API correction
 
 - Kernel CI40041887330/d585842 SUCCESS, artifact download in progress.

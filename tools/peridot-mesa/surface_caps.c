@@ -58,10 +58,15 @@ void peridot_surface_caps_install(void)
      * by its ChipID query. Use its own once token before changing the result. */
     dispatch_once_f(once, NULL, (dispatch_function_t)(uintptr_t)(cache + invoke_offset));
     uint8_t before = __atomic_load_n(value, __ATOMIC_ACQUIRE);
-    if (before > 1 || *once != (dispatch_once_t)-1) {
-        sweet_drm_log("sweetgl: CIF10 capability unchanged: unexpected native state");
+    /* dispatch_once_f has completed initialization before returning. Its
+     * predicate can retain a quiescent-generation encoding instead of -1;
+     * only libdispatch may interpret that private state. */
+    if (before > 1) {
+        sweet_drm_log("sweetgl: CIF10 capability unchanged: native value %u, once %#llx",
+            before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
         return;
     }
     __atomic_store_n(value, 0, __ATOMIC_RELEASE);
-    sweet_drm_log("sweetgl: native CIF10 surface capability %u -> 0 for FD735 interop", before);
+    sweet_drm_log("sweetgl: native CIF10 surface capability %u -> 0 for FD735 interop, once %#llx",
+        before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
 }
