@@ -4,6 +4,28 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0155 photo-symbolicated CPU1 GICR fault and native stride correction
+
+- User provided a photo of0153 panic: CPU1 PSCI CPU_ON rc=0, then synchronous
+  external data abort ESR96000010, PCfffffe0007a987b8, FARfffffe000b970008.
+  Actual0153 kernel symbolication identifies pe_init_fiq+14c, inlined
+  find_gicr_pe_base: second GICR_TYPER read at mapped base+20000+8.
+  This is a real invalid MMIO access, not a rejected PSCI CPU_ON request.
+- Fresh read-only recovery FDT capture confirms GICD17100000+10000,
+  GICR17180000+200000 and redistributor-stride=<00000000 00040000>.
+  Private work/live-gic0155.tar. Existing ADT omits stride; hardcoded20000
+  scan hits a padding/gap address before it can find CPU1 at offset40000.
+-0155 consumes validated4/8byte little-endian ADT stride, bounds RD/SGI
+  frame accesses, preserves LAST, and otherwise follows architectural VLPIS
+  frame sizing. Logs selected affinity/offset/typer/stride per CPU. mkadt.py
+  now emits40000 for peridot and20000 for QEMU. Existing private0092 tree
+  must also receive the native64bit little-endian property in0155 builder.
+- Linux v6.12 irq-gic-v3.c:gic_iterate_rdists and arm,gic-v3.yaml confirm
+  explicit stride takes precedence over natural RD/SGI/VLPI frame size.
+  Keep cpus8/reset210/shot190 and0151 Mesa;0152 ownership,0153 earlylog,
+  0154 pre-UFS panicreset included. Source patch applies cleanly; full CI
+  build and real eight-core bring-up still pending. No graphics/FPS claim.
+
 ### 0153 actual early panic; repeat for photo,0154 early reset fix
 
 - CI40048583971/63afa0c SUCCESS. KernelSHA589e86435455fe081449987aa94c60fed1c6ad6ba1a8081c7de4f78512de8ad5,

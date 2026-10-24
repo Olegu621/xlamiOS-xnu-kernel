@@ -1,0 +1,81 @@
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -25,6 +25,9 @@
+ static vm_offset_t gicd_base;
+ static vm_offset_t gicr_base;
+ static vm_offset_t gicr_size;
++/* Zero selects the architectural RD/SGI/VLPI frame layout. */
++SECURITY_READ_ONLY_LATE(static uint64_t) gicr_stride;
++#define GICR_TYPER_HAS_VLPIS (1ULL << 1)
+ 
+ static uint32_t
+ _gic_read32(vm_offset_t addr)
+@@ -51,23 +54,37 @@
+ #define gicr_read64(offset) (_gic_read64(gicr_pe_base + (offset)))
+ 
+ static vm_offset_t
+-find_gicr_pe_base()
++find_gicr_pe_base(void)
+ {
+ 	// We only care about aff1 and aff0
+ 	uint32_t phys_id = __builtin_arm_rsr64("MPIDR_EL1") & (MPIDR_AFF1_MASK | MPIDR_AFF0_MASK);
+ 
+-	for (vm_offset_t offset = 0; offset < gicr_size; offset += GICR_PE_SIZE) {
++	for (vm_offset_t offset = 0; offset <= gicr_size - GICR_PE_SIZE;) {
+ 		vm_offset_t gicr_pe_base = gicr_base + offset;
+ 		uint64_t gicr_typer = gicr_read64(GICR_TYPER);
+ 		uint32_t aff_value = (uint32_t) (gicr_typer >> GICR_TYPER_AFFINITY_VALUE_SHIFT) & (MPIDR_AFF1_MASK | MPIDR_AFF0_MASK);
+ 
++		uint64_t stride = gicr_stride;
++		if (!stride) {
++			stride = GICR_PE_SIZE;
++			if (gicr_typer & GICR_TYPER_HAS_VLPIS) {
++				stride *= 2;
++			}
++		}
++
+ 		if (phys_id == aff_value) {
++#if defined(SWEET)
++			kprintf("SWEET GIC: cpu=%u affinity=0x%x RD-offset=0x%llx typer=0x%llx stride=0x%llx\n",
++			    ml_get_cpu_number_local(), phys_id, (unsigned long long)offset,
++			    (unsigned long long)gicr_typer, (unsigned long long)stride);
++#endif
+ 			return gicr_pe_base;
+ 		}
+ 
+-		if (gicr_typer & GICR_TYPER_LAST) {
++		if ((gicr_typer & GICR_TYPER_LAST) || stride > gicr_size - offset) {
+ 			break;
+ 		}
++		offset += (vm_offset_t)stride;
+ 	}
+ 
+ 	panic("%s: cannot find GICR base for core %u", __func__, ml_get_cpu_number(phys_id));
+@@ -125,6 +142,27 @@
+ 		uint64_t const gicd_size_prop = ((uint64_t const *) prop)[1];
+ 		uint64_t const gicr_base_prop = ((uint64_t const *) prop)[2];
+ 		uint64_t const gicr_size_prop = ((uint64_t const *) prop)[3];
++
++		if (gicr_size_prop < GICR_PE_SIZE) {
++			panic("%s: GICR region is smaller than one RD/SGI frame", __func__);
++		}
++		/* Padding between redistributors is described by the board, not MPIDR. */
++		void const *stride_prop;
++		unsigned int stride_size;
++		if (SecureDTGetProperty(entry, "redistributor-stride", &stride_prop, &stride_size) == kSuccess) {
++			uint64_t stride;
++			if (stride_size == sizeof(uint64_t)) {
++				stride = *(const uint64_t *)stride_prop;
++			} else if (stride_size == sizeof(uint32_t)) {
++				stride = *(const uint32_t *)stride_prop;
++			} else {
++				panic("%s: invalid redistributor-stride size %u", __func__, stride_size);
++			}
++			if (stride < GICR_PE_SIZE || (stride & 0xFFFF) || stride > gicr_size_prop) {
++				panic("%s: invalid redistributor-stride 0x%llx", __func__, (unsigned long long)stride);
++			}
++			gicr_stride = stride;
++		}
+ 
+ 		// Find GICD base address
+ 		gicd_base = ml_io_map(soc_base_phys + gicd_base_prop, gicd_size_prop);

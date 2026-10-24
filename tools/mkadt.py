@@ -31,6 +31,8 @@ SOC_BASE = 0x01000000
 
 GICD, GICD_SIZE = 0x17100000, 0x10000
 GICR, GICR_SIZE = 0x17180000, 0x200000
+# Live peridot FDT pads each redistributor to 256 KiB.
+GICR_STRIDE = 0x40000
 FB, FB_SIZE = 0xe3940000, 2712 * 4880
 SWEET_ECID = 0x5357454554000001  # 'SWEET' + 1, synthetic
 FB_W, FB_H, FB_STRIDE = 1220, 2712, 1220 * 4
@@ -172,6 +174,7 @@ def build(seed=None, qemu=False, highmem=False):
         ('compatible', cstr('arm,gic-v3')),
         ('interrupt-controller', b''),
         ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else VTIMER_INTID)),
+        ('redistributor-stride', u64(0x20000 if qemu else GICR_STRIDE)),
         ('reg', u64(gicd - SOC_BASE, GICD_SIZE, gicr - SOC_BASE, GICR_SIZE)),
     ])
     arm_io = node('arm-io', [
