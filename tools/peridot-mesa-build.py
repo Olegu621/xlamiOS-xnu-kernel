@@ -300,7 +300,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0164-native-refresh-render-probe'
+    provenance['frontend_revision'] = 'peridot-0165-native-SDR-material-scenes'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout

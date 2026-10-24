@@ -101,6 +101,11 @@ void peridot_surface_caps_install(void)
         {"deep-framebuffer", UINT64_C(0x188381f38), UINT64_C(0x1e1df7318), UINT64_C(0x1e1df7330),
          152, 132, {0xd100c3ff,0xa9014ff4,0xa9027bfd,0x910083fd},
          {0xa9427bfd,0xa9414ff4,0x9100c3ff,0xd65f03c0}},
+        /* Exact CoreMaterial MTIOSurfaceCreate calls this before choosing
+         * single-plane BGRA versus deep b3a8/two-plane storage. */
+        {"CoreMaterial-deep-color", UINT64_C(0x1a7ca6a2c), UINT64_C(0x1dd930348), UINT64_C(0x1dd930350),
+         36, 20, {0xa9bf7bfd,0x910003fd,0xf0182760,0x91376000},
+         {0xd01ae448,0x390d2100,0xa8c17bfd,0xd65f03c0}},
     };
     setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
     for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); ++i)

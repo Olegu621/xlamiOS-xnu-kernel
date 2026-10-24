@@ -4,8 +4,59 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0165 scene submission bound and native CoreMaterial SDR choice
 
-### 0164 native refresh contract + rendering diagnosis prepared (2026-10-25)
+- Entire164 console audited:53,147lines accounted, repeating successACKs and
+  error=0 separated from failures.9 actual submissions with33IBs were rejected
+  by old32limit, causing Mesa flush_submit_list EINVAL.13 unsupportedXRimports
+  and6GL506draws also occurred during actualinteraction. These are real failures.
+- Share PERIDOT_GPU_MAX_IBS=64 across header/IOKit/runtime. Max input5128B fits
+  existing8192limit; stackIBs1024B. Preserve ownership/range checks, globaldriver
+  lock,5-IB firmware packets, actualfences and both cache passes. Exact164ARM64
+  guard reproduces33/64rejection; rerun against165target before temporaryboot.
+- ExactSpringBoard trace resolves MTIOSurfaceCreate -> MTMaterialLayer snapshot
+  used by dock/home overlay; separate UIKit UIRenderingBufferCreate snapshot
+  remains. Add CoreMaterial native deepcolor capability to existing guarded
+  once/data policy inBB+SB. Exactinitializer36B, no capturedblockcontext;
+  nativeMTIOSurfaceCreate now chooses BGRA before allocation, bothflagcases.
+ 4/4actualnative format-choice cases pass, numeric/alignment/planehelper calls
+  stubbed; allocation/rendering not modeled. No posthoc formatretagging.
+- Independent review finds no blocker:64boundary/payload/stack/chunksequence
+  budget and exactcapabilityABI/guardwords verified. Kernel+Mesabuild and fresh
+  full210s hardware run still required. No local target LSP available.
+- User additionally requests wallpaper, realwidgets Waiting and eachlogerror
+  diagnosis. Read-only recoveryHFS catalog327,134entries captured; saved fresh
+  launchdlog, chronoSQLite+WAL, icon/widgetstate andSpringBoardpreferences.
+  No ondevice filesystem modifications. Wallpaperprefs currently none;
+  installedwidget registration/timelines/assets under investigation.
+
+### 0164 compiled and temporarily booted (2026-10-25)
+
+- Commit5bc4b848febffddcc7a045ae29f001e3fce8908f. XNU CI40133846285 SUCCESS;
+  Mesa CI40133846288 SUCCESS. Kernel17,388,176 B SHA
+  ef8f6a8c5dfa59075f155ef0b847cef1823b1bf814cea039e130a849ee32b871.
+  Library15,236,336 B SHAda9e257f2ccb243d267fbdcf4a6608c7cfedcddf861bedd55c5ad672d8c5ae15;
+  all5 module hashes plus generated layerdump match target manifest.
+- Exact compiled164 GIC16cases, panic display4gates+formatter, armVsync90cases,
+  capturewrapper9cases pass with documented hardware/VM/allocator stubs.
+  Image33,173,504 B SHAc7c6cd4887c19c5630695ea0fbf34cc6bd498b33469570b0d416ed308afe67f3.
+  Temporary fastbootboot accepted;8CPU/120software/reset210/shot190/probes1.
+- FreshconsoleSHA838172899936a6676d7756bc9b97c274788e7fc2e229588a8630ada89b825d67,
+  currentargs verified, auto recovery278.704s.8/8CPUstable. Userobserved damaged
+  image and almost unchanged motion; screenshot outputs/POCO-F6-0164.png.
+- GPU selftest ACTUAL readback:completeFBO8cd5, linked1,error0, redff0000ff,
+  blue0000ffff; context58.8ms, draw/read8.26ms, secondframe1.70ms. This proves
+  basic shaderdrawing, not intactIOSurface composition or Metal.
+- Read-only native panelprobe:12frames/201047395ns (~59.7Hz), DSI total0x15bf01af,
+  activeV0xaac0014; consistent60-Hz handoff. Native120metadata published with
+  min32.32=35791394,159999ticks. DelayedSpringBoard nativegetter probe NOT
+  observed, so successful nativeCA consumption not demonstrated.
+- Submitprofile typical perbatch cachepre1.1-1.3ms+post1.1-1.3ms vsGPUwait0.4ms;
+  36-62GB aggregate cachebytes perpass per10s. Multiple batches perframe make
+  glFinish average~30-69ms in slowwindows. Maximum nonemptycopies39.14/s.
+  Preserve necessary cache ownership while investigating redundant work.
+
+### 0164 native refresh contract + rendering diagnosis
 
 - Publish native IOMFBDisplayRefresh dictionary before registerService: integer
   displayMinRefreshInterval (32.32 seconds) and displayRefreshStepMachTime
