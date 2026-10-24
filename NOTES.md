@@ -4,6 +4,26 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0150 actual result and0151 build status
+
+-0150 completed full210s and returned to recovery. Both native caps1->0,
+  legacy float aliases withheld, main surfaces2/4 BGRA/4608.88 actual raw
+  requests complete, explicit chunk fences up to72; no ACK rejection,
+  engine poison or compositor crash observed. Only3 touch reports in this
+  idle cycle, unlike0149 user interaction. No b3a8/FBO error was exercised;
+  absence here does NOT prove the filter fixed0149's offscreen surfaces.
+- Actual shot190/power1 decoded/viewed: almost black, sparse right status
+  glyphs, tiny bottom icon and white home indicator. Still unusable. Console
+  SHA1b039ada638ec8e22f97f97059b2944da0d3816de9f3eb5b854eb5a142c48171.
+  Private cycle0150/panel.png. Main BGRA preserved, actual UI still damaged.
+-0151 source a8ff59124a948a02cd6fc96159fc3dbeea73e8e3 pushed. Mesa
+  CI40047150033 SUCCESS and downloaded work/mesa-ios0151. Kernel40047150032
+  still building. No0151 boot yet; reuse reset210/shot190.
+- Independent actual0147 kernel disassembly confirms flush_dcache64 reaches
+  real64-byte DC CIVAC loop +DSB SY, NOT a coherent-I/O no-op. Driver cleans
+  before submissions but lacks a post-GPU ownership return for CPU scanout.
+  Inspect/update that path if0151's shader/client corrections are insufficient.
+
 ### 0151 grouped candidate: UI-client surface policy and missing effect shaders
 
 - User confirmed0149 actual phone interface is visible but strongly damaged.
