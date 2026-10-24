@@ -4,6 +4,35 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0148 result and0149 candidate after full UniXNU site review
+
+-0148 returned automatically: actual log says timed capture after210s.
+  Shot190/power1 decoded/inspected BLACK. Actual CIF10 value1->0 applied;
+  opaque once243e confirms the old -1 assumption was wrong. Main surface
+  STILL b3a8, GL0x506. No usable accelerated frame or Metal is proven.
+  ConsoleSHA2f22d7af7f3cef9867320b98e9b263a39ee9d5ab7d81e39b4ea82bebe696fed3.
+- User asked to review ALL unixnu.com. Read all108 English Markdown pages
+  at UniXNU/UniXNU1a01c2afa197d975d04da892325c56b6b14aaecb; all108 zh
+  counterparts inventoried and technical/link differences inspected. Chinese
+  prose was NOT reread word-for-word. Coverage work/unixnu-site-review.
+  User reports outputs/UniXNU-review.md and UniXNU-pages.md.
+- NativeMetal c6d29caad6d880cc8204ebe3bc34d77479a3255d reviewed. Main sheng
+  docs report real Metal composition on A740; tb128fu is narrower CPU CA
+  plus GPU presentation. DroidVM is an Android/KGSL host route. Listed other
+  peridot projects have no documented hardware outcome. Do not present any
+  of these as a reproduced result on our phone.
+- Critical source scripts/add-gpu-plugin-data.py93..105 writes
+  CAEnableDeepFramebuffer=false BEFORE backboardd. Our exact20H392 confirms
+  CADeviceUseCIF10 init188381f38 / byte1e1df7318 / once1e1df7330 reads this
+  preference. AppleDisplay1883ad02c..044 copies byte to+220 bit3; native
+  IOMFB format1882c5420..460 selects b3a8 from that bit. SupportsCIF10 is
+  a DIFFERENT capability (0148 changed only it). No speculative HDR change.
+-0149 adds original-once initialization and guarded process-local clear
+  of the DEEP choice too; exactUUID/entry/exit/write-region guards, no code
+  page edits, global ChipID changes or persistent preference rewrites.
+  Compression env disabled like upstream. Actual BGRA/FBO/pixels pending.
+  Reuse kernel0147. KEEP210s reset /190s capture. Candidate build next.
+
 ### 0148 compiled and temporarily booted,210s timer
 
 - Mesa CI40043653783/230f9c7 SUCCESS. Library15235296B,

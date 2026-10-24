@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
-/*20H392 QuartzCore derives CIF10 interop from the donor ChipID. The FD735
- * frontend currently imports single-plane surfaces, so this process must
- * withhold that Apple-only surface capability. No executable page changes. */
+/*20H392 distinguishes CIF10 support from the deep-framebuffer choice.
+ * The FD735 frontend imports single-plane surfaces. Withhold both native
+ * capabilities in this process without changing executable pages. */
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #include <stdint.h>
@@ -25,6 +25,52 @@ static int writable_address(uintptr_t address)
         (info.protection & VM_PROT_WRITE) != 0;
 }
 
+struct native_surface_cap {
+    const char *name;
+    uintptr_t invoke, value, once;
+    size_t bytes, return_offset;
+    uint32_t entry[4], exit[4];
+};
+
+static void disable_cap(const uint8_t *cache, size_t length,
+    const struct native_surface_cap *cap)
+{
+    const uintptr_t preferred = UINT64_C(0x180000000);
+    const uintptr_t invoke_offset = cap->invoke - preferred;
+    const uintptr_t value_offset = cap->value - preferred;
+    const uintptr_t once_offset = cap->once - preferred;
+    if (invoke_offset > length || length - invoke_offset < cap->bytes ||
+        value_offset >= length || once_offset > length ||
+        length - once_offset < sizeof(dispatch_once_t) ||
+        cap->return_offset > cap->bytes || cap->bytes - cap->return_offset < sizeof(cap->exit) ||
+        memcmp(cache + invoke_offset, cap->entry, sizeof(cap->entry)) != 0 ||
+        memcmp(cache + invoke_offset + cap->return_offset, cap->exit, sizeof(cap->exit)) != 0) {
+        sweet_drm_log("sweetgl: %s capability unchanged: native code guard refused", cap->name);
+        return;
+    }
+    uint8_t *value = (uint8_t *)(uintptr_t)(cache + value_offset);
+    dispatch_once_t *once = (dispatch_once_t *)(uintptr_t)(cache + once_offset);
+    if (!writable_address((uintptr_t)value) || !writable_address((uintptr_t)once)) {
+        sweet_drm_log("sweetgl: %s capability unchanged: native data is not writable", cap->name);
+        return;
+    }
+    /* Both exact initializers have no block captures: x0 is overwritten by
+     * the native query. Use the original once token before changing its result. */
+    dispatch_once_f(once, NULL, (dispatch_function_t)(uintptr_t)(cache + invoke_offset));
+    uint8_t before = __atomic_load_n(value, __ATOMIC_ACQUIRE);
+    /* dispatch_once_f has completed initialization before returning. Its
+     * predicate can retain a quiescent-generation encoding instead of -1;
+     * only libdispatch may interpret that private state. */
+    if (before > 1) {
+        sweet_drm_log("sweetgl: %s capability unchanged: native value %u, once %#llx",
+            cap->name, before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
+        return;
+    }
+    __atomic_store_n(value, 0, __ATOMIC_RELEASE);
+    sweet_drm_log("sweetgl: native %s surface capability %u -> 0 for FD735 interop, once %#llx",
+        cap->name, before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
+}
+
 void peridot_surface_caps_install(void)
 {
     if (strcmp(getprogname(), "backboardd") != 0) return;
@@ -33,40 +79,21 @@ void peridot_surface_caps_install(void)
     static const uint8_t uuid[16] = {
         0x8f,0x97,0x04,0x52,0xc9,0xe3,0x3e,0x88,
         0xb1,0x14,0xfe,0xb1,0x86,0x4b,0xc9,0xe0};
-    const uintptr_t preferred = UINT64_C(0x180000000);
-    const uintptr_t invoke_offset = UINT64_C(0x188378950) - preferred;
-    const uintptr_t value_offset = UINT64_C(0x1e1df6b88) - preferred;
-    const uintptr_t once_offset = UINT64_C(0x1e1df6ba0) - preferred;
-    static const uint32_t prologue[4] = {0xa9bf7bfd,0x910003fd,0xf026bf20,0x91068000};
-    static const uint32_t epilogue[4] = {0xd02cd3e9,0x392e2128,0xa8c17bfd,0xd65f03c0};
-    if (!cache || length < 104 || memcmp(cache + 88, uuid, sizeof(uuid)) != 0 ||
-        invoke_offset > length || length - invoke_offset < 112 ||
-        value_offset >= length || once_offset > length ||
-        length - once_offset < sizeof(dispatch_once_t) ||
-        memcmp(cache + invoke_offset, prologue, sizeof(prologue)) != 0 ||
-        memcmp(cache + invoke_offset + 96, epilogue, sizeof(epilogue)) != 0) {
-        sweet_drm_log("sweetgl: CIF10 capability unchanged: unrecognized shared cache");
+    if (!cache || length < 104 || memcmp(cache + 88, uuid, sizeof(uuid)) != 0) {
+        sweet_drm_log("sweetgl: surface capabilities unchanged: unrecognized shared cache");
         return;
     }
-    uint8_t *value = (uint8_t *)(uintptr_t)(cache + value_offset);
-    dispatch_once_t *once = (dispatch_once_t *)(uintptr_t)(cache + once_offset);
-    if (!writable_address((uintptr_t)value) || !writable_address((uintptr_t)once)) {
-        sweet_drm_log("sweetgl: CIF10 capability unchanged: native data is not writable");
-        return;
-    }
-    /* The exact native initializer has no block captures: x0 is overwritten
-     * by its ChipID query. Use its own once token before changing the result. */
-    dispatch_once_f(once, NULL, (dispatch_function_t)(uintptr_t)(cache + invoke_offset));
-    uint8_t before = __atomic_load_n(value, __ATOMIC_ACQUIRE);
-    /* dispatch_once_f has completed initialization before returning. Its
-     * predicate can retain a quiescent-generation encoding instead of -1;
-     * only libdispatch may interpret that private state. */
-    if (before > 1) {
-        sweet_drm_log("sweetgl: CIF10 capability unchanged: native value %u, once %#llx",
-            before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
-        return;
-    }
-    __atomic_store_n(value, 0, __ATOMIC_RELEASE);
-    sweet_drm_log("sweetgl: native CIF10 surface capability %u -> 0 for FD735 interop, once %#llx",
-        before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
+    static const struct native_surface_cap caps[] = {
+        {"CIF10", UINT64_C(0x188378950), UINT64_C(0x1e1df6b88), UINT64_C(0x1e1df6ba0),
+         112, 96, {0xa9bf7bfd,0x910003fd,0xf026bf20,0x91068000},
+         {0xd02cd3e9,0x392e2128,0xa8c17bfd,0xd65f03c0}},
+        /* CADeviceUseCIF10 reads CAEnableDeepFramebuffer. AppleDisplay then
+         * copies it to flags+0x220 bit3, selecting b3a8 instead of BGRA. */
+        {"deep-framebuffer", UINT64_C(0x188381f38), UINT64_C(0x1e1df7318), UINT64_C(0x1e1df7330),
+         152, 132, {0xd100c3ff,0xa9014ff4,0xa9027bfd,0x910083fd},
+         {0xa9427bfd,0xa9414ff4,0x9100c3ff,0xd65f03c0}},
+    };
+    setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
+    for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); ++i)
+        disable_cap(cache, length, &caps[i]);
 }
