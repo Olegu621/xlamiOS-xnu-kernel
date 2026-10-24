@@ -4,6 +4,18 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0153 reset-data hypothesis corrected by reading arm_init
+
+- Actual arm_init.c initializes const_boot_args = *args, then assigns
+  BootArgs = args = &const_boot_args BEFORE IOKit CPU startup. Therefore the
+  existing CPU startup clean through BootArgs already covers this copy.
+  The explicit0153 clean is redundant, harmless, and NOT an established SMP
+  fix. Earlier claim that this publication was missing was premature.
+- Retain0153's useful earlier ramoops initialization to get the actual early
+  eight-core failure. CI40048583971/63afa0c building. Latest tool73e790f also
+  pulls recovery pstore and records elapsed time/current-log freshness.
+  No active phone boot; root recovery. Next image remains cpus8/reset210.
+
 ### 0151 eight-core attempt did NOT produce a fresh disk log;0153 next
 
 - cycle0151 returned to recovery before the expected full210s+startup cycle.
