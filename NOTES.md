@@ -5,6 +5,60 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0161 review complete; target builds next
+
+- Corrected C++ linkage for get_preemption_level using the existing C kernel
+  entry; no ARM cpu_data.h declaration is imported with C++ linkage.
+- Independent final source review found no blocker. Python AST parse and patch
+  application check pass. Local target LSP is unavailable; actual XNU/iOS CI
+  compile and link are the required semantic check before temporary boot.
+- Done criteria for this diagnostic: both target builds succeed; fresh hardware
+  log records bounded b3a8 user caller chains; symbolize them using each process
+  shared-cache base and the exact 20H392 binaries. This does not itself fix UI.
+
+### 0160 hardwarepartial;0161 bounded remaining-XR caller capture prepared
+
+-160freshconsole2,300,573B SHAacc1e26c18eaead60b62ce26b223090f9527efb4e6efd349b16afa76b754f9fc;
+  currentlaunchdargsverified,autoreturnd278.813s,8/8SGIstable. User:
+  almostsamebutbetter. Frameoutputs/POCO-F6-0160.png viewed:sparse text,
+  coloredcapsule/redbadge/statusicons; notusablecompleteUI.
+- Bothcontext+layersettersinstalledSB/BB. RealCALayerAutomatic→RGBA8calls;
+  originalRGBA8preserved. Existingcontexts0/0, noCAContextsettercalls.
+  Remainingb3a8:SB50(1065x282/4288),SB61(full1125x2436/4544),BB250(24x132,
+  creationpitch128,attachpitch256).5formatfailures/6GL506,9184rawACK,
+  lastcompletedfence9121. Differentuserinteractions: countsnotcontrolledFPS.
+- Exactconstructor/connect_remoteauditdoesnotjustifyanotheroptionsoverride:
+  nativeCAContextconstructoralreadyinitializesRGBA8 andremoteconnectdoesnot
+  changethatbyte. Subclass_overrideImageFormatoranindependentRenderImage
+  allocationpathstillpossible; actualremainingcallerunproven.
+-0161 addsopt-insweetxrtrace=1 onlyatSUCCESSFULb3a8creation: fourusercallchain
+  capturesperSB/BBrole,16frames, kernelbacktrace_usercopyinwalker,IRQon+
+  preemption0guards. LogsurfaceID/error/truncationflags. Noallocationformat
+  change;cachebaseloginbothfrontendprocessesallowsexactASLRsymbolication.
+  Requiredreviews/targetkernel+Mesabuildsandactualcapturedcallerchain.
+- Preserveall0160formatnegotiation,proven159GIC/CPU8,210reset/190shot. Phone
+  isrecovery,noactiveboot. Broadcommits/pushes/builds/temporarybootsauthorized.
+
+
+### 0160 compiled and temporarily booted; graphics result pending
+
+-07d6803 MesaCI40110225311 SUCCESS. Library15,235,584B SHA
+ 1aa209bf51ddde566350c0b0111ef3b2e121d195b6e5f017aa6ccbfca36d9d9b.
+  Manifestrevision0160/surface_formatsSHA matcheslocalsource. Realtarget
+  iOS16 arm64C compile/link/sign completed. No localtargetLSPavailable.
+- NativeObjCmetadata independentlychecked fromexact20H392 relative method
+  lists: CAContext+CALayersetters v24@0:8@16; getter@16@0:8. SourceABIguards
+  verified3/3. Source/edgecasereviewnoblocker; mappinglogsseparatelybounded
+  frompreservedformatlogs soXRredirects remainobservable.
+- Reused159kernel1ecb8adacf55d687f56e2ab235b93392e434446fdd9b919bc8dc5fba330eeaea.
+  Image33,173,504B SHA3f898ab5c49195e344965c5540d7c74a2609256e3194a7d6b6e6a456a9ed7262.
+  CPU8/stride40000/210normal+panicreset/shot190. Temporarybootaccepted;
+  privatework/cycle0160,session27856. UseraskedcurrentUIquality/photo.
+- Hardwarehookinstallation,actualXRcallers,genuineBGRAallocations,GL506
+  eliminationandvisibleUIimprovement remainPENDING. Lastproven0159frame
+  stilldamaged despite8coresandrealGPUcommands. NoMetalclaim.
+
+
 ### 0160 native contents format negotiation prepared
 
 -159logsprove bothcapabilityguards appliedbutSpringBoardstillcreatesb3a8

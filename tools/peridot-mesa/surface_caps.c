@@ -91,6 +91,7 @@ void peridot_surface_caps_install(void)
     size_t length = 0;
     const uint8_t *cache = peridot_surface_cache(&length);
     if (!cache) return;
+    sweet_drm_log("sweetgl: shared cache base %p size %#zx process %s", cache, length, process);
     static const struct native_surface_cap caps[] = {
         {"CIF10", UINT64_C(0x188378950), UINT64_C(0x1e1df6b88), UINT64_C(0x1e1df6ba0),
          112, 96, {0xa9bf7bfd,0x910003fd,0xf026bf20,0x91068000},

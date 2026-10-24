@@ -1,0 +1,63 @@
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -39,6 +39,13 @@
+ #include <libkern/c++/OSNumber.h>
+ #include <libkern/c++/OSUnserialize.h>
+ #include <sys/proc.h>
++#include <machine/machine_routines.h>
++#include <kern/backtrace.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++
++/* ARM cpu_data.h declares this C entry without C++ linkage guards. */
++extern "C" int get_preemption_level(void);
+ 
+ enum {
+ 	kSweetSurfaceCreate             = 0,
+@@ -72,6 +79,38 @@
+ static uint32_t      sweet_surface_users[SWEET_SURFACE_MAX_ID];
+ static uint32_t      sweet_surface_next_id = 1;
+ static uint32_t      sweet_surface_creates_logged;
++/* Opt-in, bounded user call chains for the unsupported XR allocation path.
++ * Use the kernel copyin-based walker only from a normal faultable syscall. */
++static uint32_t sweet_surface_xr_traces[2];
++
++static void
++sweet_surface_trace_xr(const SweetSurface *surface)
++{
++	if (surface->pixelFormat != 0x62336138u) return;
++	int enabled = 0;
++	if (!PE_parse_boot_argn("sweetxrtrace", &enabled, sizeof(enabled)) || !enabled) return;
++	char name[32];
++	proc_selfname(name, sizeof(name));
++	unsigned slot;
++	if (!strcmp(name, "SpringBoard")) slot = 0;
++	else if (!strcmp(name, "backboardd")) slot = 1;
++	else return;
++	if (__atomic_fetch_add(&sweet_surface_xr_traces[slot], 1, __ATOMIC_RELAXED) >= 4) return;
++	if (!ml_get_interrupts_enabled() || get_preemption_level() != 0) {
++		IOLog("SWEET XR BT: %s id %u skipped: nonfaultable context\n", name, surface->id);
++		return;
++	}
++	uintptr_t frames[16] = {};
++	struct backtrace_user_info info = {};
++	unsigned count = backtrace_user(frames, 16, NULL, &info);
++	IOLog("SWEET XR BT: %s id %u %ux%u frames %u error %d flags 0x%x\n",
++	    name, surface->id, surface->width, surface->height, count,
++	    info.btui_error, (unsigned)info.btui_info);
++	for (unsigned i = 0; i < count; ++i)
++		IOLog("SWEET XR BT: %s id %u frame %u pc 0x%llx\n",
++		    name, surface->id, i, (unsigned long long)frames[i]);
++}
++
+ static uint64_t      sweet_surface_wired;       /* bytes of buffer surfaces */
+ #define SWEET_SURFACE_WIRED_MAX         (1536ull << 20)
+ 
+@@ -718,6 +757,7 @@
+ 		    name, s->id, s->width, s->height, s->pixelFormat, s->bytesPerElement,
+ 		    s->bytesPerRow, s->planeCount, s->allocSize, props->getCount(), ret);
+ 	}
++	if (ret == kIOReturnSuccess) sweet_surface_trace_xr(s);
+ 	props->release();
+ 	if (ret != kIOReturnSuccess) {
+ 		s->release();
