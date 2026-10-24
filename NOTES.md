@@ -5,6 +5,31 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0162 target build success;0163 deferred capture SDR adapter prepared
+
+-0162 commit30cf434343b728897bf4723e961b259a50a1e51d, XNU CI40114262727 SUCCESS.
+  Next physical image will combine this kernel (uncapped120 software cadence)
+  with the following Mesa163 adapter, to avoid an extra unchanged-UI boot.
+- Exact161user stacks prove DeferredImageSlotIOSurface::realize_buffer18837cb30
+  called from render_display_layer18836dba4. NativeABI void(this,uint64,bool,ptr);
+  vtable slot1d5b29c08, backing is ref-shared fromthis+18, type0xb, XRbool+21,
+  alpha+20, cachedImage+10. XR0 makes nativeformat1/3 and actualBGRA; XR1 makes
+ 35/33 and b3a8/w30r; float argument selects13/RGhA independently.
+- New pureC surface_capture.c installs exactUUID/code/chooser/tail/vtable-guarded
+  privateCOW vtable adapter inBB beforemain. Only beforefirst allocation with
+  XR1/nonfloat/no cached image, clear the backing XR capability then call the
+  ORIGINAL native allocator. Preserve alpha, float, capability args, colorspace,
+  cached image lifecycle. CachedXR stays unchanged and is logged. No posthoc
+  fourcc retag, no Appleinstruction changes. One data page originalprotection
+  restored; rollback table+retry protection if restoration fails.
+- Independent final source review found no blocker. ExactnativeARM64 selection
+  model16/16 passes including float XRflag preservation; allocator is stubbed,
+  compiledwrapper/VMinstall/image construction are NOT covered by that model.
+  Target Mesa compile/link and actual guard/redirect/format/UI logs required.
+- Private work/build0163.py uses kernel162+Mesa163, CPU8/hz0/vsync120/reset210/
+  panic210/shot190 and both XR-format traces. Do not claim physical120Hz from
+  software timer or copied counts alone. Phone currently recovery.
+
 ### 0161 hardware captured;0162 uncapped120-Hz software pacing prepared
 
 -161 fresh console3,171,232 B SHA256
