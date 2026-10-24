@@ -68,7 +68,8 @@ static NSString *const resultPath = @"/var/mobile/Library/PeridotProbe/result.js
         if (!context || !current(context)) { [self fail:@"Контекст GLES 3 не создан"]; return; }
         const char *name = (const char *)glGetString(GL_RENDERER);
         NSString *renderer = name ? [NSString stringWithUTF8String:name] : @"unknown";
-        if (![renderer.lowercaseString containsString:@"adreno"]) {
+        if ([renderer caseInsensitiveCompare:@"FD735"] != NSOrderedSame &&
+            !([renderer.lowercaseString containsString:@"adreno"] && [renderer containsString:@"735"])) {
             [self fail:[@"Неожиданный renderer: " stringByAppendingString:renderer]]; return;
         }
         const int width = 512, height = 512;
