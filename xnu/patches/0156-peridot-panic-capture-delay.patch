@@ -1,0 +1,23 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1346,6 +1346,20 @@
+ 	uint32_t enabled = sweet_diag_panic_reset;
+ 	if (!enabled) PE_parse_boot_argn("sweetpanicreset", &enabled, sizeof(enabled));
+ 	if (enabled) {
++		uint32_t seconds = 0;
++		PE_parse_boot_argn("sweetpanicdelay", &seconds, sizeof(seconds));
++		if (seconds > 3600) seconds = 3600;
++		if (seconds != 0) {
++			uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
++			if (frequency >= 100000 && frequency <= 1000000000) {
++				uint64_t start = __builtin_arm_rsr64("CNTVCT_EL0");
++				uint64_t ticks = frequency * seconds;
++				/* No scheduler, interrupts, UFS or another CPU is required. */
++				while (__builtin_arm_rsr64("CNTVCT_EL0") - start < ticks) {
++					__asm__ volatile("yield");
++				}
++			}
++		}
+ 		__builtin_arm_dsb(0xf);
+ 		sweet_diag_reset();
+ 	}

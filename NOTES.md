@@ -4,6 +4,42 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0155 returned early without a fresh log;0156 photo delay prepared
+
+- Actual0155 temporary boot returned to recovery in38.094s, before a fresh
+  UFS log. Diskconsole remains BYTE-IDENTICAL to0150, pstore has0files.
+  User did not watch; exact new failure is UNKNOWN. No8/8 or newgraphics
+  runtime claim. Automatic early reset now operates, unlike0153's hang.
+- User declined a held panic without automatic reboot.0156 adds explicit
+  sweetpanicdelay=210: fatal screen remains visible210s using the EL1
+  architected counter, then existing PSCI reset returns to recovery. No
+  scheduler/UFS/otherCPU dependency; zero preserves existing immediate
+  reset. Frequency validated and interval bounded. Normal reset210/shot190
+  still configured. No CPU/GPU behavior is changed by this capture option.
+- Read-only review found new printf dependencies unsafe before normal
+  debugger entry; removed both calls. Delay now uses only validated volatile
+  counter reads/yield, then DSB+PSCIreset. Max1e9*3600 ticks fits uint64.
+  Source patch applies cleanly after0154; git diff --check exits0.
+  Post-CI disassembly must confirm repeated counter read and resetSMC.
+- Requires target CI compilation and actual timing/photo result.
+  User's latest AGENTS forbids commit/push without explicit instruction;
+  pending that authorization.0156 has NOT been committed, pushed or booted.
+
+### 0155 compiled and packed, temporary hardware run next
+
+- CI40087628788/77abe2a SUCCESS. Kernel17,387,976B SHA267d7e840be1b54ccd5f9c38394800310617e2438550bf41b34526f053aec4ef.
+  Image33,153,024B SHAdfa0f41228b474c4980d5c4f1fe6c2f6405e406ddcda42ade31a8cade315f8a5.
+- Actual packed payload parsed: cpus8/reset210/shot190 and64bitLE GIC
+  stride40000 confirmed. Original0092 board tree retained except new property.
+  Mesa0151 reused. Native peridot/QEMU ADT round-trip checks pass. Python
+  syntax check exits0. Full XNU target compiled successfully on macOS CI.
+- Read-only review agent found no blocking issue; confirmed live-vs-ADT
+  endian conversion, MMIO bounds, LAST handling and early panic reset.
+  No local C/Python language server is installed; no LSP result claimed.
+- Runtime eight-core/SGI, updated graphics installation and actual panel
+  remain pending. Private work/boot0155,work/cycle0155. No commits/pushes
+  after user's new instruction requiring explicit commit/push authorization.
+
 ### 0155 photo-symbolicated CPU1 GICR fault and native stride correction
 
 - User provided a photo of0153 panic: CPU1 PSCI CPU_ON rc=0, then synchronous
