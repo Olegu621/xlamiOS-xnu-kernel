@@ -4,6 +4,59 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+
+### 0158 panic display gate prepared after actual0157 boot
+
+-0157 returned automatically in248.078s. Diskconsole SHA remains exactly0150
+  a5bf3f42a430927bdc63ab1a929943a9e449b6cb5d9fd275ae8edd8c53b0ace7;
+  no current userland log, pstore empty. User photo shows virtual timer27
+  and EARLY20, but no PC/FAR. No8-core or newgraphics success claimed.
+- Source identifies why fatal text was invisible: sweet_early_disable sets
+  early_disabled after stage20; putc then suppresses pixels even though
+  sweet_early_panic sets early_panicking and runs the timed recovery reset.
+  Earlier trace/logger-failure hypothesis is not established by this photo.
+-0158 changes only putc gate to early_disabled && !early_panicking. Ordinary
+  early output still hands off; first panic can use the persistent reserved
+  TTBR1 framebuffer alias. Exact132 source+patches0012/0085: physical alias
+  e2000000..e6000000 includes fullpanel e3940000..e45df580; disable does not
+  unmap it. No new logger, wrapper, stack walk, or perCPU dependency.
+- Read-only review found no blocker. Existing nested guard and210s panic
+  delay/reset remain. Exact-source patch application and gate truth table
+  pass. TargetCI build and actual readable panic registers remain required.
+- Necessary commits/pushes/builds/temporary boots authorized by user's broad
+  explicit0157 reply. PreserveCPU8,stride40000,reset210,shot190,Mesa0151.
+
+### 0157 compiled and packed; temporary boot next
+
+- c47befe kernelCI40089994746 SUCCESS. Kernel17,388,016B SHA07024c74b2d4fd9b2159f1320d5a4e848d451054f677d167b0929fa5fe7eaf96.
+  Image33,153,024B SHA8444d51e0671fcef2bd9ae5b3d5d01dc036e4ddf4ccc0817da47b62bdb5a4248.
+- Actual binary contains compactabortPC/FAR format and no extraGIC matched
+  log. PackedCPU8/nativeGICstride40000/reset210/panicdelay210/shot190
+  verified. Mesa0151 reused. Private work/boot0157,work/cycle0157.
+  Actualeightcoreinit/graphics/newpanicaddresses pending phone run.
+
+### 0157 authorized and building; six linked ports reviewed
+
+- User explicitly said: "always allow everything, do what is needed" in
+  response to0157 commit/push approval. Treat necessary project edits,
+  commits/pushes/builds/temporary diagnostic boots as authorized going
+  forward; do not ask again for every candidate. Preserve phone data and
+  protected partitions; no destructive operation is currently needed.
+- c47befe pushed; kernelCI40089994746 building.0157 retains the prior
+  nested-panic guard: compact fatalreport only while !early_panic_started;
+  nested faults fall through to existing panic_with_thread_kernel_state.
+  Build/image/hardware result pending. Builder work/build0157.py ready.
+- Reviewed README/trees/selectedCPU/GPU sources of six userlinks. Report
+  outputs/Шесть-портов-XNU-2026-10-24.md. Most useful data-a-live9037864:
+  NativeMetal c6d29ca iOS16 adapter accepts528size, removes iPadOS17
+  QuartzCore addresses, handles3component constants/limitedreadonlyASTC.
+  Author reports GPUbackboardd/home, remainingissues. Their gen8 driver,
+  native4K kernel and128IB Turnip submission are NOT directly our735/Gallium.
+- UKE cf55281 GPUdoc same43030b00/gen71100/GMU+SQEhashes; ZAPhashdifferent.
+  GPU not yet broughtup. Marble explicitlyGPU notstarted. Nabu earlykernel,
+  Clover earlyboot/AMFI and noGPU. SkyGroup1 IRQ scheme alreadymatchesour
+  existingtimer/IPI path. No whole-repository or independent hardware audit.
+
 ### 0156 actual early screen;0157 source prepared, not yet authorized for push
 
 -0156 returned automatically in270.438s; actual fatal-screen photo obtained.

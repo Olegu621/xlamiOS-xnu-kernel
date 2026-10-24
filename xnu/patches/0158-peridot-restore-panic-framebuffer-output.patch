@@ -1,0 +1,12 @@
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -47,7 +47,8 @@
+ sweet_early_putc(char c)
+ {
+ 	sweet_log_append(&c, 1);
+-	if (early_disabled) {
++	/* The reserved framebuffer alias remains valid after normal console handoff. */
++	if (early_disabled && !early_panicking) {
+ 		return;
+ 	}
+ 	if (!early_started) {
