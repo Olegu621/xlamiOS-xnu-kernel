@@ -142,12 +142,18 @@ def main():
     texture_source = texture.read_bytes()
     (front / 'peridot_texture_functions.c').write_bytes(texture_source)
     provenance['texture_functions_sha256'] = hashlib.sha256(texture_source).hexdigest()
+    formats = Path(__file__).resolve().parent / 'peridot-mesa/surface_formats.c'
+    formats_source = formats.read_bytes()
+    (front / 'peridot_surface_formats.c').write_bytes(formats_source)
+    provenance['surface_formats_sha256'] = hashlib.sha256(formats_source).hexdigest()
     # SpringBoard runs the capability policy before its existing layer-filter
     # adapter. Its constructor returns without making any Mesa/GPU context.
     edit(front / 'sweetgl.c', 'void sweetgl_vibrant_fill_install(void);',
-         'void sweetgl_vibrant_fill_install(void);\nvoid peridot_surface_caps_install(void);')
+         'void sweetgl_vibrant_fill_install(void);\nvoid peridot_surface_caps_install(void);\n'
+         'void peridot_surface_formats_install(void);')
     edit(front / 'sweetgl.c', 'sweetgl_load(void)\n{',
-         'sweetgl_load(void)\n{\n\tperidot_surface_caps_install();')
+         'sweetgl_load(void)\n{\n\tperidot_surface_caps_install();\n'
+         '\tperidot_surface_formats_install();')
     edit(front / 'eagl.c', '#include "eagl.h"',
          '#include "eagl.h"\nvoid peridot_texture_functions_install(void);')
     # Replace the old restore's table addresses with our exact20H392 guarded
@@ -263,7 +269,7 @@ def main():
                 build / 'src', build / 'src/mesa', build / 'src/mapi', front]
     objects = []
     for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
-                 'peridot_surface_caps', 'peridot_texture_functions']:
+                 'peridot_surface_caps', 'peridot_texture_functions', 'peridot_surface_formats']:
         source = (work if name == 'dispatch' else front) / f'{name}.c'
         obj = work / f'{name}.o'
         run([clang] + common + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
@@ -278,7 +284,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0151-ui-client-surface-and-effect-pipeline'
+    provenance['frontend_revision'] = 'peridot-0160-native-contents-format-negotiation'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout

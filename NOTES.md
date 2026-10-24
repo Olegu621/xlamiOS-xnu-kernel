@@ -5,6 +5,68 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0160 native contents format negotiation prepared
+
+-159logsprove bothcapabilityguards appliedbutSpringBoardstillcreatesb3a8
+  effectsurfaces. Native20H392 CAContextsetContentsFormat18853f07c stores
+  enum+e8; default_contents_image_format1882ab258 doesnotqueryCIF10caps:
+  RGBA10XRenum2->RGB10A8_2P_XR35/nonopaque,RGB10_XR33/opaque; RGBA8enum0
+  ->BGRA1/BGRX3. retain_iosurface1883c460c jump35->1883c4788 loadsb3a8.
+  Thisindependentexplicitformatroute explainswhyglobalcapfixwasincomplete.
+- NewpureC surface_formats.c installs guarded ORIGINALsetteradaptersfor
+  CAContext/CALayer inSB+BBbeforemain. RecognizedRGBA10XR/Automatic requests
+  negotiateRGBA8beforeallocation; preserveRGBAh/A8/Gray8/etc. UUID/exactIMP/
+  native16byteentry/voidobjectsignatureguards. NoAppleinstructionwrites,
+  nofourccretagging. Atomicoriginalpointers,separateboundedredirectlogs.
+- ExistingnativeallContexts snapshot isguarded/poolscoped; inspectmax64,
+  readnativegetterandcalloriginalsetteronlyforXR/Automatic. Nativehelper
+  releasesglobalcontextmutexbeforesnapshotreturn; noGPUcontextcreation.
+- Buildercopies/compilesnewmodule, recordsSHA, callsaftercapsbeforeSBreturn;
+  provenance0160. Source/ABIreviewnoblocker; independentnativeARM64model
+ 6/6passesRGBA8vsXRvsAutomatic/opaquechoices. ModelsstubObjCdependencies;
+  thisdoesnotproveactualsettercallers/newhardwareframeyet.
+- Reuseproven159kernel/CPU8/GICstride40000/reset210/shot190. OnlyMesa changes.
+  RequiredtargetCIcompile; thenfreshsurfaceformats/GLerrors/panelphoto.
+  Privatework/build0160.py ready afterMesaartifact; noactiveboot.
+
+
+### 0159 HARDWARE: eight CPUs + iOS verified; graphics still incomplete
+
+- Freshconsole2,042,076B SHA776aa260e39a494138c0181de1a3ca94275665bf63f373c50d231e23b0419e10,
+  currentlaunchdCPU8args verified, automaticreturn278.984s includingrecovery.
+  Explicit8/8CPUs initializedandSGI1verified; all0..7 MPIDR0..700alive.
+  Userphotoconfirms8/8,thenloadediOS. GunyahMMIO fixpassesrealhardware.
+- User reportsUI visiblebutstronglydamaged. Shot190/power1 decoded160x356
+  outputs/POCO-F6-0159.png, viewed:nearlyblackwithsmallstatusicons/homebar.
+  RealGPUrawACK8070/lastloggedcompletedfence8058; notsustainedFPSmetric.
+- Current0151CIF10/deepflags1->0successfulinBOTHbackboarddandSpringBoard.
+  Fourguardedtexturetableentriesinstalled; originalprotectionsrestored.
+  YetSpringBoardcreatesb3a8TWO-PLANEoffscreensurfaces39/50/etc;11attachImage
+  formatfailures,GL506. Main2/4surfacesBGRApitch4608continueGPUscanout.
+  Nativeextended-color/offscreenformatchoice nowfocusedblocker. No fake
+  b3a8-as-BGRAinterpretation, noMetalclaim.0152CPUownershipfixincludedbut
+  didnotmakeUIusable. Root+oneagentinvestigatingnativeformatnegotiation.
+- CPU8/stride40000/scalarGICMMIO/210reset/190shot/Mesa0151isnowprovenbaseline.
+  Noactiveboot; phoneinrecovery. Broadpriorauthorizationstillapplies.
+
+
+### 0159 compiled, machine-code checks pass, temporary boot running
+
+-bf2f351 CI40092631536 SUCCESS. Kernel17,388,016B SHA 1ecb8adacf55d687f56e2ab235b93392e434446fdd9b919bc8dc5fba330eeaea;
+  image33,153,024B SHAe2cac8693b5b09e3e2cc3c9f1404d6f35e0c11144ae59d36eeede775aed068c7.
+- Actual158pe_init_fiq fails MMIO model at exactphotoPC7a98950 duepreindex.
+  Actual159 passes16/16 modeledCPU0..7 awake/asleep cases: scalarno-writeback
+  accesses, correctnative40000 redist selection, IGROUPR/8prioritywrites,
+  timer27+SGI1 enable, GICDCTL13 andICCGroup1 enabled. No registerwrite
+  skipped. Earlier tests deliberately fail158andpass159.
+- Model haspreinitializedGICbases, syntheticMMIO, stubbedMPIDR/ICC/deadline;
+  sequentialcases are notconcurrentSMP orhardwareIRQproof. Source/asmreview
+  no blocker. Panicputc+actualformatter also4/4 pass in159;storage/resetstubbed.
+- Boot accepted withCPU8/native40000/Mesa0151/normalreset210/panicdelay210/
+  shot190. Privatework/cycle0159. Userasked current159screen+photoifpanic.
+  Actualfreshlog/8online/iOS/GPU outcome PENDING. Preservebroadauthorization.
+
+
 ### 0158 hardware panic capture SUCCESS;0159 Gunyah MMIO fix prepared
 
 -091fab0 CI40091432768 SUCCESS. Kernel17,388,016B SHA
