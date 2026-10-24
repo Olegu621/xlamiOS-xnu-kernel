@@ -170,15 +170,15 @@ def main():
     edit(front / 'layerdump.c', '\tstatic int round;\n', '\tstatic int round;\n\tif (round == 0) peridot_display_probe();\n')
     provenance['layerdump_probe_sha256'] = hashlib.sha256((front / 'layerdump.c').read_bytes()).hexdigest()
     provenance['selftest_enabled_for'] = 'backboardd'
-    for component, extension in [('probe_api', 'c'), ('probe_install', 'm')]:
+    for component, extension in [('probe_api', 'c'), ('probe_install', 'm'), ('ui_restore', 'm')]:
         local = Path(__file__).resolve().parent / ('peridot-mesa/' + component + '.' + extension)
         data = local.read_bytes()
         (front / ('peridot_' + component + '.' + extension)).write_bytes(data)
         provenance[component + '_sha256'] = hashlib.sha256(data).hexdigest()
     edit(front / 'sweetgl.c', 'void peridot_surface_capture_install(void);',
-         'void peridot_surface_capture_install(void);\nvoid peridot_probe_install(void);')
+         'void peridot_surface_capture_install(void);\nvoid peridot_ui_restore(void);')
     edit(front / 'sweetgl.c', '\tperidot_surface_capture_install();',
-         '\tperidot_surface_capture_install();\n\tperidot_probe_install();')
+         '\tperidot_surface_capture_install();\n\tperidot_ui_restore();')
     edit(front / 'eagl.c', '#include "eagl.h"',
          '#include "eagl.h"\nvoid peridot_texture_functions_install(void);')
     # Replace the old restore's table addresses with our exact20H392 guarded
@@ -302,8 +302,9 @@ def main():
     objects = []
     for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
                  'peridot_surface_caps', 'peridot_texture_functions', 'peridot_surface_formats',
-                 'peridot_surface_capture', 'peridot_display_probe', 'peridot_probe_api', 'peridot_probe_install']:
-        extension = 'm' if name == 'peridot_probe_install' else 'c'
+                 'peridot_surface_capture', 'peridot_display_probe', 'peridot_probe_api', 'peridot_probe_install',
+                 'peridot_ui_restore']:
+        extension = 'm' if name in ('peridot_probe_install', 'peridot_ui_restore') else 'c'
         source = (work if name == 'dispatch' else front) / f'{name}.{extension}'
         obj = work / f'{name}.o'
         objc = ['-fobjc-arc', '-fblocks'] if extension == 'm' else []
@@ -319,7 +320,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-framework', 'Foundation', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0166-ES3-book-test-app'
+    provenance['frontend_revision'] = 'peridot-0167-native-widget-host-restore'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout

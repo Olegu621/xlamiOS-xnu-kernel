@@ -4,6 +4,31 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0167 native widget-host and wallpaper restoration prepared (2026-10-25)
+
+- Read-only HFS inspection: /Applications is root:admin0775; mobile is not in
+  admin. Staged MobileCal.app is 51 files/2578016 bytes, com.apple.mobilecal;
+  Weather.app is 55 files/16967300 bytes, com.apple.weather. Widget extension
+  metadata was empty. Do not mistake arbitrary registerApplication for install.
+- New SpringBoard worker35s: copy only these two originals into exclusive UUID
+  private staging, then call native installApplication:withOptions:error: with
+  default options. Service may consume the input copy; original staged packages
+  stay untouched. Verify native non-placeholder installed proxy/bundleURL and
+  actual Info.plist; journal result/exception/errors under
+  /var/mobile/Library/xlamiOS-Restore0167/installation.plist. Max2 attempts per
+  host/build; journal before IPC and preserve both hosts across partial runs.
+- With both native wallpaper preferences still only `none`, save them to
+  wallpaper-before.plist, request SBSUIWallpaperService restoreDefaultWallpaper
+  once, and capture preferences20s later. No claim that a void IPC request
+  produces pixels. Existing configured wallpaper remains unchanged.
+- Disable GLTest automatic installer by removing its constructor call; keep
+  the app and API sources for later. Reuse165kernel and8CPU/210s reset settings.
+- Review verified exact cache install API0x181c4a70c and synchronous XPC path,
+  plus wallpaper request0x1a3465b28. Work runs off mainqueue without our locks.
+  Original-input preservation corroborated by TrollStore RootHelper/main.m.
+  Exact10frontendanchors and Python syntax pass; targetCI and actual native
+  install/widget/wallpaper result remain pending. No local target LSP available.
+
 ### 0166 hardware result and public Telegram link (2026-10-25)
 
 - Commit 9d5ff27f93a3222764fc7c134f0dfab5dfe9aaf8: Mesa CI 40138379071
