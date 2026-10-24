@@ -5,6 +5,35 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0158 hardware panic capture SUCCESS;0159 Gunyah MMIO fix prepared
+
+-091fab0 CI40091432768 SUCCESS. Kernel17,388,016B SHA
+  bd14e48e012bd02bf665bb36ee2474b68fbba24699bb23b8269f70180b600072;
+  image33,153,024B SHAb1e63082fc6794d73b710947e363117e472c73085876dbe705326c9f40474cd0.
+- Actual158 user photo nowshows SWEET EARLY PANIC withPC7a98950,
+  LR7a98940,FARb960080,ESR96000010. Zero-likefontblur initially looked
+  likeb960b80; expectedbase+offset corroboratesb960080. Panictext restoration
+  confirmed onhardware. Automaticrecovery248.125s; disk stillbyteidentical
+  0150,pstoreempty. No newiOS/GPU/8core success.
+- Actual158PC is pe_init_fiq+244: pre-indexed STR w9,[x8,#80]! at
+  GICR_IGROUPR0. Same effectiveaddress as0153's working CPU0 register-offset
+  STR withoutwriteback. Rootfailure is stronglysupported as Gunyah's MMIO
+  instruction restriction, rather than wrongIGROUPR address/securitygroup.
+- Live recoverydmesg explicitly: Running under Gunyah hypervisor51/v1.
+  OfficialGunyahAPI limitsvirtualMMIO toscalarloads/stores withoutbase
+  writeback. vdevice.c handlesonlyISV=1; trap_dispatch injectsotherwise;
+  exception_inject.c clearsISS then setsFSC_SYNC_EXTERNAL, explaining
+  read-lookingESR96000010 evenforSTR. Exactfirmware sourceversion unknown.
+-0159 SWEETonly_gic_read32/read64/write32 explicit volatileLDR/STR[address]
+  plusmemoryclobber; retainsallregisterwrites, stride40000,CPU8,timers210.
+  NonSWEETrawvolatilepath unchanged. Exact-source patch applies. Required:
+  reviewer,CIcompile,actualbinaryno-writebackcheck,temporaryhardwareboot.
+-0158 narrow Unicorn test executesactualputc+formatter:0157failsdisabled
+  paniccase(0pixels),0158 passes4/4 and formatsPC/FAR withpixelwrites.
+  RAM framebuffer, append/storage/resetstubbed: notHWmapping/resetproof.
+  Privatework/check-panic-fb0158.py;read-onlyreviewfoundnoblockingpatchissue.
+
+
 ### 0158 panic display gate prepared after actual0157 boot
 
 -0157 returned automatically in248.078s. Diskconsole SHA remains exactly0150
@@ -18,7 +47,7 @@
 -0158 changes only putc gate to early_disabled && !early_panicking. Ordinary
   early output still hands off; first panic can use the persistent reserved
   TTBR1 framebuffer alias. Exact132 source+patches0012/0085: physical alias
-  e2000000..e6000000 includes fullpanel e3940000..e45df580; disable does not
+  e2000000..e6000000 includes fullpanel e3940000..e45df180; disable does not
   unmap it. No new logger, wrapper, stack walk, or perCPU dependency.
 - Read-only review found no blocker. Existing nested guard and210s panic
   delay/reset remain. Exact-source patch application and gate truth table

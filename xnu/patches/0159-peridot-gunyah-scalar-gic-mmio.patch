@@ -1,0 +1,46 @@
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -29,22 +29,43 @@
+ SECURITY_READ_ONLY_LATE(static uint64_t) gicr_stride;
+ #define GICR_TYPER_HAS_VLPIS (1ULL << 1)
+ 
++/*
++ * Gunyah emulates GIC MMIO using the syndrome of a scalar LDR/STR.
++ * Plain volatile C may become pre/post-indexed access (ISV=0 at EL2),
++ * which is rejected even when its effective register address is correct.
++ */
+ static uint32_t
+ _gic_read32(vm_offset_t addr)
+ {
++#if defined(SWEET)
++	uint32_t value;
++	__asm__ volatile("ldr %w0, [%1]" : "=r" (value) : "r" (addr) : "memory");
++	return value;
++#else
+ 	return *((volatile uint32_t *) addr);
++#endif
+ }
+ 
+ static uint64_t
+ _gic_read64(vm_offset_t addr)
+ {
++#if defined(SWEET)
++	uint64_t value;
++	__asm__ volatile("ldr %0, [%1]" : "=r" (value) : "r" (addr) : "memory");
++	return value;
++#else
+ 	return *((volatile uint64_t *) addr);
++#endif
+ }
+ 
+ static void
+ _gic_write32(vm_offset_t addr, uint32_t value)
+ {
++#if defined(SWEET)
++	__asm__ volatile("str %w0, [%1]" : : "r" (value), "r" (addr) : "memory");
++#else
+ 	*((volatile uint32_t *) addr) = value;
++#endif
+ }
+ 
+ #define gicd_read32(offset) (_gic_read32(gicd_base + (offset)))
