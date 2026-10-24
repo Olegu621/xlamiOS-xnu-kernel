@@ -1,0 +1,15 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1342,7 +1342,11 @@
+ void
+ sweet_diag_panic_done(void)
+ {
+-	if (sweet_diag_panic_reset) {
++	/* CPU/IOKit panics can precede UFS and sweet_diag_start(). */
++	uint32_t enabled = sweet_diag_panic_reset;
++	if (!enabled) PE_parse_boot_argn("sweetpanicreset", &enabled, sizeof(enabled));
++	if (enabled) {
++		__builtin_arm_dsb(0xf);
+ 		sweet_diag_reset();
+ 	}
+ }

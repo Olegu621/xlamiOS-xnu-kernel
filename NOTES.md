@@ -4,6 +4,25 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0153 actual early panic; repeat for photo,0154 early reset fix
+
+- CI40048583971/63afa0c SUCCESS. KernelSHA589e86435455fe081449987aa94c60fed1c6ad6ba1a8081c7de4f78512de8ad5,
+  17387872B. ImageSHA68f7648a827044b6aea167608f8bd6fb8f741487be232c71729776fdb83d96dd.
+  Temporarily booted with cpus8/reset210/shot190 and0151 Mesa. User reports
+  CPU panic; exact panic text is still UNKNOWN, no photo yet. Do not infer
+  that the generic panic(cpu0...) header necessarily means CPU_ON failure.
+- No automatic return within480s. User later manually returned to recovery.
+  Disk log remains BYTE-IDENTICAL to0150; pstore empty. Thus no fresh8core,
+  new graphics pipeline or updated panel result. Current recovery CPU/USB
+  identity confirmed. Repeat153 boot temporarily accepted, private
+  work/cycle0153-repeat, waiting for user's exact panic photo and recovery.
+- Source explains early-reset failure: sweet_diag_panic_reset was only set
+  in sweet_diag_start() AFTER UFS initialization.0154 reads the same explicit
+  boot argument in the panic path too, so early panics can PSCI warm-reset
+  without UFS readiness. Normal210s diagnostic interval stays unchanged.
+  Early ramoops writes/barriers from153 remain; warm reset may preserve its
+  evidence better than a manual hard reset. Actual retention still unproven.
+
 ### 0153 reset-data hypothesis corrected by reading arm_init
 
 - Actual arm_init.c initializes const_boot_args = *args, then assigns
