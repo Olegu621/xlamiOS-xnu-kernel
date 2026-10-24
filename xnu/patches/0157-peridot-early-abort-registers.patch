@@ -1,0 +1,39 @@
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -73,11 +73,6 @@
+ 		}
+ 
+ 		if (phys_id == aff_value) {
+-#if defined(SWEET)
+-			kprintf("SWEET GIC: cpu=%u affinity=0x%x RD-offset=0x%llx typer=0x%llx stride=0x%llx\n",
+-			    ml_get_cpu_number_local(), phys_id, (unsigned long long)offset,
+-			    (unsigned long long)gicr_typer, (unsigned long long)stride);
+-#endif
+ 			return gicr_pe_base;
+ 		}
+ 
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1651,7 +1651,22 @@
+ 		panic_with_thread_kernel_state("Kernel parity error.", state);
+ #endif
+ 	} else {
++#if defined(SWEET)
++		/* Reach the early display before the ordinary logger or stack walker. */
++		if (!sweet_early_panic_started()) {
++			panic_plain("Kernel abort code=0x%x\n"
++			    "pc=0x%016llx lr=0x%016llx\n"
++			    "far=0x%016llx esr=0x%016llx\n",
++			    (unsigned int)fault_code,
++			    (unsigned long long)get_saved_state_pc(state),
++			    (unsigned long long)get_saved_state_lr(state),
++			    (unsigned long long)fault_addr,
++			    (unsigned long long)esr);
++		}
++		/* Nested faults reach the existing guard in the common panic below. */
++#else
+ 		kprintf("Unclassified kernel abort (fault_code=0x%x)\n", fault_code);
++#endif
+ 	}
+ 
+ 	panic_with_thread_kernel_state("Kernel data abort.", state);

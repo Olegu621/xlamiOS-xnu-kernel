@@ -4,6 +4,42 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0156 actual early screen;0157 source prepared, not yet authorized for push
+
+-0156 returned automatically in270.438s; actual fatal-screen photo obtained.
+  Disklog still byte-identical0150,pstore empty. The visible last normalline
+  is new GIC cpu0/affinity0/RDoffset0/typer1/stride40000, then unclassified
+  abort code10, before CPU registration. Do not claim8cores or graphics.
+- This proves an early regression in the new candidate, not a later CPU1
+  success. Completed GIC text does NOT establish kprintf returned: actual
+  binary calls os_log_with_args after doprnt but before epilogue. WAKER
+  and following CPU0 MMIO effective addresses match0153; ABI x20 preserved.
+  Exact new PC/FAR unknown; logging is a candidate, not a proven cause.
+- Existing panic_with_thread_kernel_state calls sweet_early_trace BEFORE
+  its fullregister panic. New210s pause cannot recover a missing report
+  if that trace/ordinary logger faults first.0157 removes the extra GIC
+  log and uses existing panic_plain directly in SWEET's already-fatal
+  unclassified abort branch: savedPC/LR/faultaddress/ESR printed before
+  stackwalking and the existing210s pause. No recoverable fault path or
+  nonSWEET behavior changes. Native40000 stride/bounds andcpus8 preserved.
+- Source patch applies; fullCI and realhardware pending. Only0156
+  commit/push was explicitly authorized.0157 remains LOCAL pending user
+  approval after review. User also supplied6 repos; research in progress.
+
+### 0156 compiled; real counter loop and reset verified in binary
+
+- Explicit user authorization received for0156 commit/push.2c76852 pushed;
+  CI40088656832 SUCCESS. Kernel17,387,976B SHA6352f46ccbf66f2f6e1d5dabcca7fc23c0efec57001104046762fdd44d208d74.
+  Image33,153,024B SHA62332094009397ff21808cf62a8066fe64ee6890e76bc56a65729b81c838b2f6.
+- Actual compiled sweet_diag_panic_done reads CNTVCT at74f0730, then
+  repeatedly at74f073c with64bit delta/compare and yield/back-edge. After
+  interval it executes DSB and PSCI SYSTEM_RESET SMC at74f0770. No printf
+  or scheduler in the delay path. Confirms optimizer retained real delay.
+- Packed payload confirms cpus8,normalreset210,panicdelay210,panicreset1,
+  shot190,GICstride40000.0151 Mesa reused; no new graphics behavior claim.
+  Temporary boot next, private work/cycle0156. User to photograph full
+  early error during210s interval; automatic recovery remains enabled.
+
 ### 0155 returned early without a fresh log;0156 photo delay prepared
 
 - Actual0155 temporary boot returned to recovery in38.094s, before a fresh
