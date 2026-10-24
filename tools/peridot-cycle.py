@@ -111,6 +111,9 @@ def main():
             except (ValueError, IndexError):
                 ready = False
             if ready:
+                pstore = run(adb + ['pull', '/sys/fs/pstore', str(a.out / 'pstore')],
+                             timeout=60, check=False)
+                (a.out / 'pstore-result.txt').write_bytes(pstore.stdout + pstore.stderr)
                 for _ in range(3):
                     r = run([sys.executable, str(pull), '-s', serial, str(a.out / 'console.txt')], timeout=60, check=False)
                     (a.out / 'pull-result.txt').write_bytes(r.stdout + r.stderr)
@@ -122,6 +125,7 @@ def main():
                         current_args = 'boot-args = ' + command_line in text
                         result = {'before_sha256': before_sha, 'after_sha256': after_sha,
                                   'unchanged_disk_log': same, 'current_userland_args': current_args,
+                                  'elapsed_seconds': round(time.monotonic() - start, 3),
                                   'current_userland_log_verified': current_args and not same}
                         (a.out / 'freshness.json').write_text(json.dumps(result, indent=2) + '\n')
                         if same:
