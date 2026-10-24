@@ -4,6 +4,39 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0168 entitled native client prepared; 0167 hardware refusal (2026-10-25)
+
+- 0167 commit4d923492a563150e1391a61b8fb242d6b27be49b, MesaCI40140234609 SUCCESS.
+  LibrarySHA30fc1c9c98d8bfd6895ca7f39aa915b987cd7a7ad8d5832ed0f78463ca6eb1ce;
+  imageSHAb304862e701c41017573d18bc1e4f7016d565bea6244cb30b2b3286b46a99cd6.
+  Auto recovery278.672s; freshconsoleSHAa0d6e87be9c77484d088cf4da45b2439770d7d68fe3aa71a027397af23f4e279.
+  Native Calendar and Weather installs both returned0/NSPOSIXErrorDomain1,
+  Missing Entitlement=InstallForLaunchServices, function
+  _LSValidateEntitlementsOfConnectionForVanillaInstall. No installed proxies;
+  chrono ExtensionMetadata/Descriptors/WidgetMetadata remain0. Wallpaper prefs
+  before/after both remain `none`; user confirms no visible improvement.
+- Exact CoreServices181cb8bc8 passes InstallForLaunchServices to181cb1184,
+  which reads com.apple.private.mobileinstall.allowedSPI as an array and
+  checks membership. Scope the fix to our own signed helper, not a global
+  entitlement bypass or changes to Apple's SpringBoard signature.
+- Split restoration into standalone own arm64/Foundation helper, codesigned
+  with allowedSPI=[InstallForLaunchServices], wallpaper-access, no-container.
+  It checks its actual SecTask entitlement before requesting installation,
+  explicitly loads CoreServices/SpringBoardUIServices, preserves original
+  packages and journals bounded attempts under xlamiOS-Restore0168.
+  Keeps alive until delayed wallpaper preference observation; exit0 only for
+  verified installed hosts, not merely successful spawn.
+- SpringBoard writes only a new exact embedded helper in own0700 directory,
+  digest-tagged filename, O_EXCL/O_NOFOLLOW, full byte/owner/mode verification,
+  then posix_spawn. Removes inherited DYLD_/SWEETGL_ transport from child env.
+  Records child exit/signal. TargetCI/native execution still required.
+- Review fixes before CI: verify actual signed Mach-O XML entitlement slot5
+  against intended policy (kernel parser is XML-only); publish complete helper
+  atomically by mkstemp/fsync/link without overwrite so reset cannot leave a
+  partial final executable. Redirect child stdout/stderr into exclusive own
+  private log and save last-helper-log.txt: the kernel's /dev/null tee permits
+  SB/BB only and would lose the standalone helper's early diagnostics.
+
 ### 0167 native widget-host and wallpaper restoration prepared (2026-10-25)
 
 - Read-only HFS inspection: /Applications is root:admin0775; mobile is not in

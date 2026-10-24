@@ -298,6 +298,12 @@ def main():
     spec.loader.exec_module(probe_builder)
     provenance['probe_app'] = probe_builder.build(work, output, clang, common)
     provenance['probe_builder_sha256'] = hashlib.sha256(probe_script.read_bytes()).hexdigest()
+    helper_script = Path(__file__).resolve().parent / 'peridot-mesa/ui_restore_build.py'
+    helper_spec = importlib.util.spec_from_file_location('peridot_ui_builder', helper_script)
+    helper_builder = importlib.util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(helper_builder)
+    provenance['ui_restore_helper'] = helper_builder.build(work, output, clang, common)
+    provenance['ui_restore_builder_sha256'] = hashlib.sha256(helper_script.read_bytes()).hexdigest()
     includes.append(work)
     objects = []
     for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
@@ -320,7 +326,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-framework', 'Foundation', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0167-native-widget-host-restore'
+    provenance['frontend_revision'] = 'peridot-0168-entitled-native-install-helper'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout
