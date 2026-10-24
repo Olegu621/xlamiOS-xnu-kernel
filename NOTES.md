@@ -4,6 +4,28 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0148 compiled and temporarily booted,210s timer
+
+- Mesa CI40043653783/230f9c7 SUCCESS. Library15235296B,
+  SHA f16c647376d07ec267049d5ff095157a8d59cb43d73dbb677dd23b3495f94f24.
+- Reuses verified0147 kernel CI40041887330/d585842. ImageSHA
+  a4fa02ca3acb04b6e576d312596df0c71b226bb1db7d8a0d18fff69581709ed7.
+  Actual image args sweetdiagreset210 / sweetfbshot190. Temp boot accepted.
+  Runtime CIF10 value, format, GPU/rendering/panel result still pending.
+- Read-only exact-cache audit also found upstream optional texture-table
+  addresses are4000bytes earlier than20H392: actual tex_fragment_shaders
+ 1d5b48a10, actual uniform cases18855e1e4-11. Baseline13 points to
+  colorMatrix4x4Bias(s0),14/26/27/2d are NULL/casede. No texture hooks enabled
+  yet; old optional hooks remain disabled. Local evidence private
+  work/quartz-texture-table0148.json.
+
+### Latest timer request (2026-10-24): 3.5 minutes
+
+- User explicitly changed the duration to3.5minutes: KEEP sweetdiagreset=210
+  for every next image until further steering. Capture190,20s before reset.
+  This supersedes all older180s instructions below. Builder0148 updated;
+  kernel rebuild is unnecessary because these are verified boot arguments.
+
 ### 0148 candidate: use the dispatch_once_f completion contract
 
 -0147 completed its automatic180s reset and returned to recovery. Host USB
