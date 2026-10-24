@@ -4,6 +4,41 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0149: main BGRA and visible PARTIAL UI, not a usable accelerated desktop
+
+- Full210s automatic cycle returned normally. Both native capability guards
+  applied1->0 (CIF10 once2276, deep once2286). Main display surfaces2/4 now
+  genuine BGRA/stride4608; main b3a8/FBO failure fixed. No raw rejection,
+  engine poison or compositor crash observed; last logged chunk fence7721.
+- Real panel shot190/power1 viewed: sparse dotted text/status icons and a
+  dark colored rounded capsule/red badge; most of the frame is black. This
+  is visible partial output alongside actual GPU rendering, NOT a usable UI
+  or complete hardware acceleration/Metal. Private cycle0149/panel.png; user
+  copy outputs/POCO-F6-0149.png.
+- Remaining GL0x506 occurs on b3a8 INTERMEDIATES created by backboardd:
+ 14524x132/stride256,1701065x282/4288,1811125x2436/4544. These are not main
+  display swaps. Need trace offscreen-format negotiation/client properties;
+  do not reinterpret packed10-bit planes as BGRA.
+- Complete consoleSHA23b9436469dd8b1105389663890c3a64ed9af57728e0b15eb113c00262b8d324.
+  User touch reports1258/drops0. Flush snapshots up to11.3/s, not a claimed
+  sustained display FPS benchmark. Main BGRA path now proven on hardware.
+- Latest explicit timer remains210s. Site report updated with actual result.
+
+### 0149 compiled and temporarily running,210s timer
+
+- Mesa CI40045548481/069e11c SUCCESS; real dylib15235312B SHA
+  d4a6d9f28070b6c3687ee56eb3e32d8d1d032fd828c7b0be8376e3e350af57da.
+- Kernel reused0147/d585842. ImageSHA
+  df7b844555baf67cbcb2550c7e4d372a66b4051e0727fbc235e19f757ee080bc.
+  Mode21/peridotgles1/reset210/shot190, temporary fastboot boot accepted.
+  Actual surface selection/GPU/panel result pending; work/cycle0149.
+- Read-only exact20H392 Metal extraction: _MTLDevice class_ro instanceSize
+ 528. Upstream NativeMetal guard expects536 for17.7.11. This proves an ABI
+  difference, not impossibility; compare layouts/methods before any port.
+  Private work/dylibs0149/Metal, upstream NativeMetal c6d29ca.
+- CPU ADT timebase is19200000 on all8 CPUs, inspected without changing it.
+  No timer-frequency issue established.210s is the selected diagnostic wait.
+
 ### 0148 result and0149 candidate after full UniXNU site review
 
 -0148 returned automatically: actual log says timed capture after210s.
