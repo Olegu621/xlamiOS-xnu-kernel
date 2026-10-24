@@ -2,6 +2,13 @@
 
 **Apple's iOS 16 running on the POCO F6 (`peridot`, Qualcomm SM8635 / Snapdragon 8s Gen 3).**
 
+## Videos and updates / Видео проекта
+
+**[xlamiOS on Telegram — t.me/xlamios](https://t.me/xlamios)**
+
+Watch iOS running on the POCO F6 and follow the port's progress.
+Видео работы iOS на POCO F6 и ход разработки — в нашем Telegram-канале.
+
 This project boots Apple's open-source XNU kernel (xnu-8796, the iOS 16
 generation) on the POCO F6 and runs the **iOS 16.7 userland** on
 top of it: launchd, the system daemons, backboardd, SpringBoard and the
@@ -20,12 +27,12 @@ The boot and recovery partitions are preserved during these sessions.
 | Area | State |
 | --- | --- |
 | Boot | Stock bootloader → `fastboot boot` of our shim → XNU → iOS. Temporary kernel image; iOS writes its root volume and diagnostic log |
-| CPU | ARM64, 16 KiB pages, GICv3 and timers; current peridot sessions use `cpus=1` |
+| CPU | ARM64, 16 KiB pages, GICv3 and timers; all 8 CPUs initialize and pass the SGI1 startup check |
 | Memory | Upper DDR bank, private DMA buffers and explicit cache maintenance |
 | Storage | Own UFS host driver; the iOS root is a journaled HFS+ volume in `userdata`, read/write |
 | iOS userland | Real iPhone X 16.7 root filesystem and shared cache; launchd and the system daemons run |
-| Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`); CoreAnimation renders in software; frames are copied into the bootloader's framebuffer. Presented to iOS as an iPhone X panel (1125×2436) |
-| GUI | backboardd and SpringBoard run; the lock screen has been confirmed on the phone |
+| Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`); experimental Mesa/freedreno GLES rendering on Adreno 735. Frames are copied/scaled into the bootloader's framebuffer; the physical panel currently runs at about 60 Hz |
+| GUI | Lock screen, home screen, Settings and Control Center appear on the phone; missing content, shifted keyboard letters and rendering defects remain |
 | Touch | Goodix BerlinD (9916R) over GPIO SPI; 844 valid reports and 45 matched contact down/up pairs verified through HID |
 | Buttons | Power, volume up/down (PMIC over SPMI) as HID consumer keys |
 | Panel rails | AVDD and IOVDD voted through RPMh, reset sequenced on the panel's GPIO |
@@ -37,7 +44,7 @@ real touch input pass; the user confirmed the result. This uses CPU scaling.
 
 ## Not there yet
 
-- No GPU driver: everything is drawn by the CPU.
+- GPU rendering is experimental: basic shader/pixel checks pass on Adreno 735, but the interface remains incomplete and slow. Full hardware acceleration, Metal support and physical 120 Hz are not established.
 - No Wi-Fi, Bluetooth, cellular, audio, camera, sensors or Secure Enclave.
 - No App Store and no Apple ID.
 - Touch transport and HID delivery have been exercised by real fingers; visual calibration and longer sessions remain to be checked.

@@ -4,6 +4,34 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0166 hardware result and public Telegram link (2026-10-25)
+
+- Commit 9d5ff27f93a3222764fc7c134f0dfab5dfe9aaf8: Mesa CI 40138379071
+  SUCCESS after correcting the Mesa 25 entrypoint resolver and accepting the
+  measured FD735 renderer identity. Reuses the verified 0165 kernel.
+  Library SHA256 7ebd714621b1d0e4f83213656e308999c8fa72a9f3e25df2bb6dbeb2ee463309;
+  image SHA256 fb3ee16912e215fec071bbf7b85a4b2f4f9c6291917e2b27742667ef7ec19ec7.
+- Temporary boot returned automatically in 278.703 s. Current arguments and
+  changed console verified; console SHA256
+  5002763336297d2c952f611c9a035d639099278fe1ffe69f904feece797492fc.
+  All 8 CPUs initialize. SpringBoard registerApplication returned 0 for
+  /var/mobile/Library/PeridotProbe/GLTest.app; the user saw no application open.
+  Do not claim successful installation or launch. User now deprioritizes this
+  app and requests useful port improvements, especially built-in apps/widgets
+  and wallpapers. Preserve existing test files for later diagnosis.
+- User explicitly requests promoting their Telegram channel https://t.me/xlamios
+  on GitHub. Add a visible bilingual README link; correct obsolete CPU/software
+  rendering status using already observed hardware results, without claiming
+  complete acceleration or 120 Hz.
+- New public reference: oosexgang/hackios-xnu-userland, examined at
+  a79ff0772a3454fd1ef127e181e5b3bce6c9ce18. Its select-system.py/init.c expose
+  staged system apps under /Applications; eagl.c handles CoreAnimation draws
+  with no shader program for wallpapers. These are reference mechanisms,
+  not patches proven compatible with this iOS 16.7 cache. The source also
+  documents registration rejection from /private/var, consistent with 0166.
+  haxiPorts post 1349 labels the supplied reference video iOS16.5 on OnePlus8;
+  video alone does not establish its GPU renderer or refresh rate.
+
 ### 0166 actual ES3 test application prepared
 
 - User asks to find/install a testprogram on iOS. Selected MIT OpenGL ES3 book
