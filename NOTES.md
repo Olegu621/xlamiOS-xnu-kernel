@@ -5,6 +5,54 @@
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
 
+### 0161 hardware captured;0162 uncapped120-Hz software pacing prepared
+
+-161 fresh console3,171,232 B SHA256
+  f8b89e420f7f97361fbcffb9b5c1eaee962b5e8fa354c271a185b2c8c5b1397d;
+  currentargs verified, auto return279.110s,8/8CPU/SGI stable.8format failures,
+ 6GL506. Screenshot outputs/POCO-F6-0161.png still sparse/damaged.
+- Three BB b3a8 surfaces24x132 yielded16frames each,error0/truncated.
+  Exact cache symbolication proves DeferredImageSlotIOSurface::realize_buffer
+  ->create_iosurface_with_pixel_format->SurfaceUtil->IOSurfaceCreate, called
+  through CASCaptureDisplayLayer/render_display_layer. Not the layer setter
+  route. No SB b3a8 this run; separate unsupported w30r surface230 appeared.
+- User now explicitly requests removing the FPS cap and smooth120Hz. Existing
+  kernel has fixed60-Hz relative callback plus payload sweetfb_hz15. Live recovery
+  DRM connector modes include1220x2712x60/120/90/30vid. This does NOT prove that
+  XNU inherits an active120-Hz panel mode or nativeCA120 metadata.
+-0162 changes software cadence via sweetfb_vsync30..120; bootbuilder sets120
+  and sweetfb_hz0 (every dirty frame). Absolute phase deadlines skip expired
+  slots after present/shot/fade/log; no per-frame heap allocation.5s counters
+  separate callbacks/swaps/attempts/copied/nonempty pixel writes and time/missed.
+  Copied count is not proof of a complete correct frame or hardware scanout.
+- Extend bounded kernel trace to w30r separately from b3a8, four per process/format
+  (max16captures). Preserve all formats/rendering/GIC8/reset210/shot190 and Mesa161.
+- Final independent source review no blocker. Exact two-file apply check passes;
+  narrow scheduler arithmetic model45/45 + cap ratios5/5 pass, old relative timer
+  drift reproduced. Target CI compile/link and fresh rate log remain required.
+  Plan work/plan0162.md; private builder work/build0162.py. Phone recovery.
+
+### 0161 compiled and temporary hardware boot accepted
+
+- Commit 9f4df72bf1cbb5841f01dade847d8bf872d6953c. Kernel CI 40112365879
+  SUCCESS; Mesa CI 40112365886 SUCCESS. Exact target compile and link passed.
+- Kernel 17,371,680 B SHA256
+  01519e40f4a75e6fa4ceadd802aa8f80563fe46a76cb874c0da488c88c859b2f.
+  Mesa 15,235,504 B SHA256
+  621a087033319d893de0936e68f12a8521b78b23cbfd897053488aa0e6ab8819;
+  all three local module hashes match the CI manifest.
+- Image 33,173,504 B SHA256
+  f5ba05b1f7ca6b261618a6857a7be5a425d4b8af6ccb2fd1201ad2ff9c70baba.
+  CPU8, normal/panic reset210, screenshot190, sweetxrtrace=1 verified in payload.
+  Temporary boot accepted; private work/cycle0161, shell session86627.
+- Actual new kernel instructions passed GIC model16/16 and panic framebuffer
+  gate4/4 + formatted-panic checks. These stub hardware/reset, not physical SMP.
+  Hardware return, freshness, XR call chains and UI remain PENDING.
+- Exact shared cache available in work/dsc0146. Use work/symbolicate-xr0161.py
+  after capture: subtract each process runtime base, add preferred180000000;
+  ipsw a2s --image checks the containing image/section. Helper known-address
+  fixture passed; it is not a real trace. No local target LSP available.
+
 ### 0161 review complete; target builds next
 
 - Corrected C++ linkage for get_preemption_level using the existing C kernel

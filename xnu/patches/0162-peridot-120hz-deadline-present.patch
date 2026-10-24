@@ -1,0 +1,271 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -25,7 +25,7 @@
+  * Everything else is accepted and logged once.
+  *
+  * SwapEnd copies the enabled layers' surfaces into the panel memory (no
+- * scaling on legacy panels, full-panel scale on peridot). Vsync (notification type 5) is a 60 Hz timer that
++ * scaling on legacy panels, full-panel scale on peridot). Vsync (notification type 5) uses a configurable software timer that
+  * sends (count, mach_absolute_time, 0) as 32-bit halves to clients that
+  * enabled it, through the port they registered (IOConnectSetNotificationPort).
+  *
+@@ -69,7 +69,6 @@
+ #define SWEET_FB_LAYERS                 4
+ #define SWEET_FB_NOTIFY_TYPES           8
+ #define SWEET_FB_NOTIFY_VSYNC           5
+-#define SWEET_FB_VSYNC_US               16667
+ #define SWEET_FB_DOT_PITCH              458     /* ppi, as the iPhone X panel */
+ /*
+  * The iOS userland only has status bar / layout data for real iPhone
+@@ -99,6 +98,12 @@
+ 	IOTimerEventSource *fVsync;
+ 	uint64_t            fVsyncCount;
+ 	uint64_t            fShotDeadline; /* optional, one-shot console capture */
++	uint32_t            fVsyncHz;
++	uint64_t            fVsyncPeriod, fNextVsync;
++	uint64_t            fReportStart, fReportTicks, fReportSwapBase;
++	uint64_t            fSwapCount, fPresentAttempts, fCopiedFrames;
++	uint64_t            fCopyTime, fCopyMax, fSkippedSlots;
++	void armVsync(IOTimerEventSource *sender);
+ 
+ 	static void vsyncFired(OSObject *owner, IOTimerEventSource *sender);
+ 
+@@ -126,7 +131,7 @@
+ 	void addClient(IOMobileFramebufferUserClient *client);
+ 	void removeClient(IOMobileFramebufferUserClient *client);
+ 	void swap(const uint8_t *rec);
+-	void present(const uint8_t *rec);
++	bool present(const uint8_t *rec);
+ 	void diagnosticShot(void);
+ };
+ 
+@@ -221,16 +226,26 @@
+ 		}
+ 		return false;
+ 	}
++	fVsyncHz = 60;
++	PE_parse_boot_argn("sweetfb_vsync", &fVsyncHz, sizeof(fVsyncHz));
++	if (fVsyncHz < 30 || fVsyncHz > 120) fVsyncHz = 60;
++	clock_interval_to_absolutetime_interval(1, NSEC_PER_SEC / fVsyncHz, &fVsyncPeriod);
++	if (!fVsyncPeriod) return false;
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+-	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
++	/* Zero means every fresh frame; an optional lower cap rounds down. */
++	fFlushTicks = (hz == 0 || hz >= fVsyncHz) ? 1 : (fVsyncHz + hz - 1) / hz;
++	fReportStart = mach_absolute_time();
++	fNextVsync = fReportStart + fVsyncPeriod;
++	fVsyncCount = fReportTicks = fReportSwapBase = fSwapCount = 0;
++	fPresentAttempts = fCopiedFrames = fCopyTime = fCopyMax = fSkippedSlots = 0;
+ 	fShotDeadline = 0;
+ 	uint32_t shot = 0;
+ 	PE_parse_boot_argn("sweetfbshot", &shot, sizeof(shot));
+ 	if (shot && shot <= 3600) {
+ 		clock_interval_to_deadline(shot, NSEC_PER_SEC, &fShotDeadline);
+ 	}
+-	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
++	fVsync->wakeAtTime(fNextVsync);
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+@@ -239,6 +254,8 @@
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+ 	IOLog("SWEET FB: panel mapping %s\n", fScale ? "full-panel scale" : "center/crop");
++	IOLog("SWEET FB: software vsync %u Hz, present every %u ticks; panel mode inherited\n",
++	    fVsyncHz, fFlushTicks);
+ 	return true;
+ }
+ 
+@@ -282,27 +299,69 @@
+ 		if (shot) {
+ 			fb->diagnosticShot();
+ 		}
+-		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++		fb->armVsync(sender);
+ 		return;
+ 	}
+ 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
+-	uint8_t *rec = NULL;
++	/* One work-loop callback owns this snapshot; no allocation per frame. */
++	uint8_t rec[SWEET_FB_SWAP_REC_SIZE];
+ 	if (flush) {
+-		rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
+-		if (rec != NULL) {
+-			memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+-			fb->fDirty = false;
+-		}
++		memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
++		fb->fDirty = false;
+ 	}
+ 	IOLockUnlock(fb->fLock);
+-	if (rec != NULL) {
+-		fb->present(rec);
+-		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
++	if (flush) {
++		uint64_t begin = mach_absolute_time();
++		bool copied = fb->present(rec);
++		uint64_t duration = mach_absolute_time() - begin;
++		++fb->fPresentAttempts;
++		if (copied) ++fb->fCopiedFrames;
++		fb->fCopyTime += duration;
++		if (duration > fb->fCopyMax) fb->fCopyMax = duration;
+ 	}
+ 	if (shot) {
+ 		fb->diagnosticShot();
+ 	}
+-	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++	fb->armVsync(sender);
++}
++
++/* Keep the original phase. A slow copy/shot skips expired slots instead of
++ * adding its duration to every frame, or issuing a burst of overdue callbacks. */
++void
++AppleCLCD::armVsync(IOTimerEventSource *sender)
++{
++	uint64_t now = mach_absolute_time();
++	fNextVsync += fVsyncPeriod;
++	if (fNextVsync <= now) {
++		uint64_t skipped = (now - fNextVsync) / fVsyncPeriod + 1;
++		fNextVsync += skipped * fVsyncPeriod;
++		fSkippedSlots += skipped;
++	}
++	uint64_t elapsedNS;
++	absolutetime_to_nanoseconds(now - fReportStart, &elapsedNS);
++	if (elapsedNS >= 5ULL * NSEC_PER_SEC) {
++		uint64_t copyNS, maxNS, swaps;
++		absolutetime_to_nanoseconds(fCopyTime, &copyNS);
++		absolutetime_to_nanoseconds(fCopyMax, &maxNS);
++		IOLockLock(fLock);
++		swaps = fSwapCount;
++		IOLockUnlock(fLock);
++		IOLog("SWEET FB RATE: window_ms=%llu callbacks=%llu swaps=%llu attempts=%llu copied=%llu copy_us=%llu max_us=%llu missed=%llu\n",
++		    elapsedNS / 1000000, fVsyncCount - fReportTicks, swaps - fReportSwapBase,
++		    fPresentAttempts, fCopiedFrames, copyNS / 1000, maxNS / 1000, fSkippedSlots);
++		fReportStart = now;
++		fReportTicks = fVsyncCount;
++		fReportSwapBase = swaps;
++		fPresentAttempts = fCopiedFrames = fCopyTime = fCopyMax = fSkippedSlots = 0;
++	}
++	/* Logging can itself consume a slot: sample the clock again before arming. */
++	now = mach_absolute_time();
++	if (fNextVsync <= now) {
++		uint64_t skipped = (now - fNextVsync) / fVsyncPeriod + 1;
++		fNextVsync += skipped * fVsyncPeriod;
++		fSkippedSlots += skipped;
++	}
++	sender->wakeAtTime(fNextVsync);
+ }
+ 
+ /* Small read-only diagnostic frame in the existing console log. RGB332
+@@ -421,10 +480,9 @@
+ 
+ /* Copy each enabled layer's surface into the panel memory (no scaling). */
+ /*
+- * A swap only records the frame: copying 10 MB into the panel on every
+- * swap (backboardd presents at 60 Hz) took the whole CPU. The vsync timer
+- * shows the latest frame every fFlushTicks ticks (boot-arg sweetfb_hz,
+- * default 10 Hz).
++ * A swap records the newest frame. sweetfb_hz=0 removes the copy throttle;
++ * sweetfb_vsync selects the software notification cadence up to120 Hz.
++ * Absolute deadlines avoid adding CPU copy time to the selected interval.
+  */
+ void
+ AppleCLCD::swap(const uint8_t *rec)
+@@ -432,16 +490,18 @@
+ 	IOLockLock(fLock);
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
++	++fSwapCount;
+ 	IOLockUnlock(fLock);
+ 	if ((++sweet_fb_swap_count % 1000) == 0) {
+ 		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
+ 	}
+ }
+ 
+-void
++bool
+ AppleCLCD::present(const uint8_t *rec)
+ {
+ 	uint32_t mask = get32(rec, 0x104);
++	bool copied = false;
+ 
+ 
+ 	if (!fConsolePaused) {
+@@ -493,8 +553,19 @@
+ 			struct sweet_display_rect from = { sx, sy, sw > 0 ? sw : w, sh > 0 ? sh : h };
+ 			struct sweet_display_rect to = { dx, dy, w, h };
+ 			if (bpe == 4 && s->elementWidth == 1 && s->elementHeight == 1) {
+-				(void)sweet_display_scale_blit(&panel, &surface, fLogicalW, fLogicalH,
++				/* The blitter treats an empty clip as success. Count only pixel writes. */
++				int64_t left = dx < 0 ? 0 : dx, top = dy < 0 ? 0 : dy;
++				int64_t right = (int64_t)dx + w, bottom = (int64_t)dy + h;
++				if (right > fLogicalW) right = fLogicalW;
++				if (bottom > fLogicalH) bottom = fLogicalH;
++				bool pixels = left < right && top < bottom &&
++				    (left * fWidth + fLogicalW - 1) / fLogicalW <
++				    (right * fWidth + fLogicalW - 1) / fLogicalW &&
++				    (top * fHeight + fLogicalH - 1) / fLogicalH <
++				    (bottom * fHeight + fLogicalH - 1) / fLogicalH;
++				bool ok = sweet_display_scale_blit(&panel, &surface, fLogicalW, fLogicalH,
+ 				    from, to, fScaleColumns, fWidth);
++				copied |= ok && pixels;
+ 			}
+ 			s->release();
+ 			continue;
+@@ -537,6 +608,7 @@
+ 			src = 0;
+ 		}
+ 		if (src != 0 && bpe == 4) {
++			copied = true;
+ 			for (int32_t y = 0; y < h; y++) {
+ 				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
+ 				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
+@@ -545,6 +617,7 @@
+ 		}
+ 		s->release();
+ 	}
++	return copied;
+ }
+ 
+ bool
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -81,12 +81,15 @@
+ static uint32_t      sweet_surface_creates_logged;
+ /* Opt-in, bounded user call chains for the unsupported XR allocation path.
+  * Use the kernel copyin-based walker only from a normal faultable syscall. */
+-static uint32_t sweet_surface_xr_traces[2];
++static uint32_t sweet_surface_xr_traces[2][2];
+ 
+ static void
+ sweet_surface_trace_xr(const SweetSurface *surface)
+ {
+-	if (surface->pixelFormat != 0x62336138u) return;
++	unsigned format;
++	if (surface->pixelFormat == 0x62336138u) format = 0;
++	else if (surface->pixelFormat == 0x77333072u) format = 1;
++	else return;
+ 	int enabled = 0;
+ 	if (!PE_parse_boot_argn("sweetxrtrace", &enabled, sizeof(enabled)) || !enabled) return;
+ 	char name[32];
+@@ -95,7 +98,7 @@
+ 	if (!strcmp(name, "SpringBoard")) slot = 0;
+ 	else if (!strcmp(name, "backboardd")) slot = 1;
+ 	else return;
+-	if (__atomic_fetch_add(&sweet_surface_xr_traces[slot], 1, __ATOMIC_RELAXED) >= 4) return;
++	if (__atomic_fetch_add(&sweet_surface_xr_traces[slot][format], 1, __ATOMIC_RELAXED) >= 4) return;
+ 	if (!ml_get_interrupts_enabled() || get_preemption_level() != 0) {
+ 		IOLog("SWEET XR BT: %s id %u skipped: nonfaultable context\n", name, surface->id);
+ 		return;
+@@ -103,8 +106,8 @@
+ 	uintptr_t frames[16] = {};
+ 	struct backtrace_user_info info = {};
+ 	unsigned count = backtrace_user(frames, 16, NULL, &info);
+-	IOLog("SWEET XR BT: %s id %u %ux%u frames %u error %d flags 0x%x\n",
+-	    name, surface->id, surface->width, surface->height, count,
++	IOLog("SWEET XR BT: %s id %u %ux%u fmt 0x%x frames %u error %d flags 0x%x\n",
++	    name, surface->id, surface->width, surface->height, surface->pixelFormat, count,
+ 	    info.btui_error, (unsigned)info.btui_info);
+ 	for (unsigned i = 0; i < count; ++i)
+ 		IOLog("SWEET XR BT: %s id %u frame %u pc 0x%llx\n",
