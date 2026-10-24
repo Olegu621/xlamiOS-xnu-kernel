@@ -4,6 +4,47 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0166 actual ES3 test application prepared
+
+- User asks to find/install a testprogram on iOS. Selected MIT OpenGL ES3 book
+  ParticleSystem, pinned423d936e31f5240fb893fcc8ae5549c70efaa2bf. CI fetches source
+  pluslicense, adapts immutablevertexdata toVBO, builds nativearm64 UIKit app.
+  Currentfrontend has no drawablepresent implementation; app uses currentMesa
+  offscreen512FBO andseparateUIImagepreview, not an inventednative present path.
+- Export Mesa getProcAddress +existingpixelselftest; generatedtypedGLloader
+  avoids linking GLcalls toApple's renderer. App checks actualAdrenorenderer,
+  recordsdraw+finishms/GLerrors/renderFPS/selftest with10Hzpreview clearlylabeled.
+  OneNSThread ownscontext; backgroundpauses andatomicforegroundflag resets timing
+  after real suspension. Reports under /var/mobile/Library/PeridotProbe/result.json.
+- Embed our signedapp files inMesa. SB worker after60s writesnewownapp directory,
+  lstat refuses symlink/non-directory, unique exclusivelycreatedstaging is cleaned
+  only onfailure; unrelatedexistingbundle untouched. NativeLSregister APIguards,
+  proxybundleURL verification andfirstlaunch retry untilAPPdidFinish marker.
+  No existingapp/systemfile overwrite. Nativeinstallation/launch/pixels pending.
+- Review caught andfixedpathescape, stale-staging, firstlaunchretry and suspended
+  FPSwindow errors. SourceAST/exact10frontendanchors/whitespace pass. Actualtarget
+  compile/link andphysicalinstallation remain required; no localtargetLSP.
+- Uservideo77.43s examined via12timestampedframes. Settings/keyboard/controlcenter
+  visible, icons/background andwidgets missing; fullkeyboardframe additionally
+  confirms letters displacedLEFT versuskeycaps. Do not describe this as solely
+  missingresources: textposition/rendering defect remains to investigate.
+
+### 0165 fresh hardware result
+
+- Commit1af00e860a3a07aae121c06e1da27a8e05b4d70f: kernelCI40136350975 andMesa
+  CI40136351009 SUCCESS. KernelSHA0f2a4996e866e01bce815a58e23ae9139cd398e0258201bad46d50b427d3a30b;
+  librarySHA281dd2ed316a84484406dcaaef4c323f2844089ff520917203111ff84f4f0df2.
+  Actualbounds instructions:8/8casespass,33/64previouslyfailed nowaccepted,
+  0/65/uintmaxstillrejected. Modelstopsafterbounds; GPUexecution excluded.
+- ImageSHAd35632fb38191e5dbe7df27e453e16698949933238eca55266431fd4518bcc0c;
+  freshconsoleSHAa393a96ea34fbbff9ba5c5229f0825a5366d37b352ef093c950426de1c74db7c,
+  currentargsverified/autorecovery278.75s.8CPUsstable, physicalpanel~60Hz.
+- NativeCoreMaterialcap1->0 logged inBB+SB. No unsupportedformat/GL506/submitfailed
+  inthisinteraction, but source-limit test not proof33actuallyoccurred thisrun.
+  BasicGPUselftestpassagain, secondframe9.01ms (notfixed1.7msclaim). Maxnonempty
+  copies50.79/s, finishslowwindows~27-64ms. Userpicturealmostunchanged.
+  Screenshotoutputs/POCO-F6-0165.png differsfrom164, stillmissingcontent.
+
 ### 0165 scene submission bound and native CoreMaterial SDR choice
 
 - Entire164 console audited:53,147lines accounted, repeating successACKs and

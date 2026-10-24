@@ -6,6 +6,7 @@ headers stay in the build directory; only the library and provenance are outputs
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -169,6 +170,15 @@ def main():
     edit(front / 'layerdump.c', '\tstatic int round;\n', '\tstatic int round;\n\tif (round == 0) peridot_display_probe();\n')
     provenance['layerdump_probe_sha256'] = hashlib.sha256((front / 'layerdump.c').read_bytes()).hexdigest()
     provenance['selftest_enabled_for'] = 'backboardd'
+    for component, extension in [('probe_api', 'c'), ('probe_install', 'm')]:
+        local = Path(__file__).resolve().parent / ('peridot-mesa/' + component + '.' + extension)
+        data = local.read_bytes()
+        (front / ('peridot_' + component + '.' + extension)).write_bytes(data)
+        provenance[component + '_sha256'] = hashlib.sha256(data).hexdigest()
+    edit(front / 'sweetgl.c', 'void peridot_surface_capture_install(void);',
+         'void peridot_surface_capture_install(void);\nvoid peridot_probe_install(void);')
+    edit(front / 'sweetgl.c', '\tperidot_surface_capture_install();',
+         '\tperidot_surface_capture_install();\n\tperidot_probe_install();')
     edit(front / 'eagl.c', '#include "eagl.h"',
          '#include "eagl.h"\nvoid peridot_texture_functions_install(void);')
     # Replace the old restore's table addresses with our exact20H392 guarded
@@ -282,25 +292,34 @@ def main():
                 mesa / 'src/gallium/include', mesa / 'src/gallium/auxiliary',
                 mesa / 'src/gallium/drivers', mesa / 'src/gallium/winsys',
                 build / 'src', build / 'src/mesa', build / 'src/mapi', front]
+    probe_script = Path(__file__).resolve().parent / 'peridot-probe/build.py'
+    spec = importlib.util.spec_from_file_location('peridot_probe_builder', probe_script)
+    probe_builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe_builder)
+    provenance['probe_app'] = probe_builder.build(work, output, clang, common)
+    provenance['probe_builder_sha256'] = hashlib.sha256(probe_script.read_bytes()).hexdigest()
+    includes.append(work)
     objects = []
     for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
                  'peridot_surface_caps', 'peridot_texture_functions', 'peridot_surface_formats',
-                 'peridot_surface_capture', 'peridot_display_probe']:
-        source = (work if name == 'dispatch' else front) / f'{name}.c'
+                 'peridot_surface_capture', 'peridot_display_probe', 'peridot_probe_api', 'peridot_probe_install']:
+        extension = 'm' if name == 'peridot_probe_install' else 'c'
+        source = (work if name == 'dispatch' else front) / f'{name}.{extension}'
         obj = work / f'{name}.o'
-        run([clang] + common + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
+        objc = ['-fobjc-arc', '-fblocks'] if extension == 'm' else []
+        run([clang] + common + objc + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
             ['-I' + str(p) for p in includes] + ['-c', source, '-o', obj])
         objects.append(obj)
     exports = work / 'exports.txt'
-    exports.write_text('_sweetgl_init\n_sweetgl_create\n_sweetgl_make_current\n_sweetgl_destroy\n')
+    exports.write_text('_sweetgl_init\n_sweetgl_create\n_sweetgl_make_current\n_sweetgl_destroy\n_sweetgl_selftest\n_sweetgl_get_proc_address\n')
     library = output / 'peridot-sweetgl.dylib'
     run([clangpp] + common + ['-dynamiclib', '-dead_strip', '-install_name', '/usr/lib/peridot-sweetgl.dylib',
         '-exported_symbols_list', exports, '-o', library] + objects + selected +
         ['-framework', 'IOKit', '-framework', 'CoreFoundation', '-framework', 'IOSurface',
-         '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
+         '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-framework', 'Foundation', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0165-native-SDR-material-scenes'
+    provenance['frontend_revision'] = 'peridot-0166-ES3-book-test-app'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout

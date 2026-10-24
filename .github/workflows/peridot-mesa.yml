@@ -6,6 +6,7 @@ on:
     paths:
       - tools/peridot-mesa-build.py
       - tools/peridot-mesa/**
+      - tools/peridot-probe/**
       - .github/workflows/peridot-mesa.yml
 concurrency:
   group: peridot-mesa-${{ github.ref }}
