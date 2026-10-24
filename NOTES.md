@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0150 candidate: single-plane offscreen effect capability negotiation
+
+-0149 fixed MAIN display format, but backboardd still creates b3a8 effect
+  render targets145/170/181. Exact20H392 GLESContext legacy extension query
+  sets its own floating image bits11/13 independently of the native deep
+  framebuffer bit.0150 withholds four optional OES float texture aliases
+  from that legacy query, reusing the bounded0146 filter together with the
+  now-proven0149 native deep choice.0146 alone did NOT fix the main display;
+  this new combined candidate targets the remaining OFFSCREEN surfaces.
+- No packed10-bit-as-BGRA reinterpretation, new client connection, Metal
+  claim or executable-page edit. Genuine Mesa GLES3 implementation stays.
+  Static QuartzCore texture table hooks remain DISABLED. Their exact20H392
+  addresses are known but code/data protection and actual need still matter.
+- Reuse verified0147 kernel, reset210/shot190. Build/real result pending.
+
 ### 0149: main BGRA and visible PARTIAL UI, not a usable accelerated desktop
 
 - Full210s automatic cycle returned normally. Both native capability guards

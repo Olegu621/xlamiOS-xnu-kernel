@@ -100,6 +100,40 @@ def main():
          '\t}\n'
          '\tsweet_drm_log("sweetgl: GLES %d context created", attribs.major);\n'
          '\tc->st = st;')
+    # The actual20H392 GLESContext constructor probes the legacy OES float
+    # extension strings to select its extended-color image path. The
+    # IOSurface frontend supports single-plane SDR storage; withhold these
+    # optional extension aliases until two-plane RGB10/alpha interop exists.
+    edit(front / 'eagl.c',
+         '\t\tstatic char *ext;\n'
+         '\t\tif (ext == NULL && asprintf(&ext, "%s GL_EXT_shader_framebuffer_fetch", s) < 0) {\n'
+         '\t\t\text = NULL;\n'
+         '\t\t}\n'
+         '\t\treturn ext != NULL ? (const GLubyte *)ext : s;',
+         '\t\tstatic char *ext;\n'
+         '\t\tstatic pthread_mutex_t ext_lock = PTHREAD_MUTEX_INITIALIZER;\n'
+         '\t\tpthread_mutex_lock(&ext_lock);\n'
+         '\t\tif (ext == NULL) {\n'
+         '\t\t\tif (asprintf(&ext, "%s GL_EXT_shader_framebuffer_fetch", s) < 0) ext = NULL;\n'
+         '\t\t\tif (ext != NULL) {\n'
+         '\t\t\tstatic const char *const deferred[] = {\n'
+         '\t\t\t    "GL_OES_texture_half_float", "GL_OES_texture_half_float_linear",\n'
+         '\t\t\t    "GL_OES_texture_float", "GL_OES_texture_float_linear"};\n'
+         '\t\t\tfor (unsigned i = 0; i < sizeof(deferred) / sizeof(deferred[0]); ++i) {\n'
+         '\t\t\t\tsize_t len = strlen(deferred[i]);\n'
+         '\t\t\t\tchar *at = ext;\n'
+         '\t\t\t\twhile ((at = strstr(at, deferred[i])) != NULL) {\n'
+         '\t\t\t\t\tif ((at == ext || at[-1] == \' \') && (at[len] == \' \' || at[len] == 0))\n'
+         '\t\t\t\t\t\tmemset(at, \' \', len);\n'
+         '\t\t\t\t\tat += len;\n'
+         '\t\t\t\t}\n'
+         '\t\t\t}\n'
+         '\t\t\tsweet_drm_log("sweetgl: withholding legacy float aliases for single-plane effect surfaces");\n'
+         '\t\t\t}\n'
+         '\t\t}\n'
+         '\t\tconst GLubyte *result = ext != NULL ? (const GLubyte *)ext : s;\n'
+         '\t\tpthread_mutex_unlock(&ext_lock);\n'
+         '\t\treturn result;')
     caps = Path(__file__).resolve().parent / 'peridot-mesa/surface_caps.c'
     caps_source = caps.read_bytes()
     (front / 'peridot_surface_caps.c').write_bytes(caps_source)
@@ -236,7 +270,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0149-native-deep-framebuffer-choice'
+    provenance['frontend_revision'] = 'peridot-0150-single-plane-effect-capabilities'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout
