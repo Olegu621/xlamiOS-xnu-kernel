@@ -138,16 +138,23 @@ def main():
     caps_source = caps.read_bytes()
     (front / 'peridot_surface_caps.c').write_bytes(caps_source)
     provenance['surface_capabilities_sha256'] = hashlib.sha256(caps_source).hexdigest()
+    texture = Path(__file__).resolve().parent / 'peridot-mesa/texture_functions.c'
+    texture_source = texture.read_bytes()
+    (front / 'peridot_texture_functions.c').write_bytes(texture_source)
+    provenance['texture_functions_sha256'] = hashlib.sha256(texture_source).hexdigest()
+    # SpringBoard runs the capability policy before its existing layer-filter
+    # adapter. Its constructor returns without making any Mesa/GPU context.
+    edit(front / 'sweetgl.c', 'void sweetgl_vibrant_fill_install(void);',
+         'void sweetgl_vibrant_fill_install(void);\nvoid peridot_surface_caps_install(void);')
+    edit(front / 'sweetgl.c', 'sweetgl_load(void)\n{',
+         'sweetgl_load(void)\n{\n\tperidot_surface_caps_install();')
     edit(front / 'eagl.c', '#include "eagl.h"',
-         '#include "eagl.h"\nvoid peridot_surface_caps_install(void);')
-    edit(front / 'eagl.c', 'sweetgl_eagl_install(void)\n{',
-         'sweetgl_eagl_install(void)\n{\n\tperidot_surface_caps_install();')
-    # Fixed shared-cache addresses belong to a different restore. Build the
-    # generic EAGL path with these optional hooks disabled pending our ABI audit.
+         '#include "eagl.h"\nvoid peridot_texture_functions_install(void);')
+    # Replace the old restore's table addresses with our exact20H392 guarded
+    # expression/uniform data adapter. Diagnostic instruction hooks stay off.
     edit(front / 'eagl.c', '\tsgl_install_texfns();',
-         '\tif (getenv("PERIDOT_VERIFIED_CACHE_HOOKS")) sgl_install_texfns();')
-    edit(front / 'eagl.c', '\tif (trace_left > 0) {\n\t\tsgl_install_fmt_hook();',
-         '\tif (trace_left > 0 && getenv("PERIDOT_VERIFIED_CACHE_HOOKS")) {\n\t\tsgl_install_fmt_hook();')
+         '\tperidot_texture_functions_install();')
+    edit(front / 'eagl.c', '\tif (trace_left > 0) {\n\t\tsgl_install_fmt_hook();\n\t}\n', '')
     edit(mesa / 'src/freedreno/meson.build', "if system_has_kms_drm\n  subdir('drm')\n",
          "if system_has_kms_drm or host_machine.system() == 'darwin'\n  subdir('drm')\n")
     # This build selects only MSM, with calls provided by our IOKit facade.
@@ -255,7 +262,8 @@ def main():
                 mesa / 'src/gallium/drivers', mesa / 'src/gallium/winsys',
                 build / 'src', build / 'src/mesa', build / 'src/mapi', front]
     objects = []
-    for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch', 'peridot_surface_caps']:
+    for name in ['sweetgl', 'sweet_drm', 'eagl', 'layerdump', 'dispatch',
+                 'peridot_surface_caps', 'peridot_texture_functions']:
         source = (work if name == 'dispatch' else front) / f'{name}.c'
         obj = work / f'{name}.o'
         run([clang] + common + ['-O2', '-Wall', '-fvisibility=hidden'] + definitions +
@@ -270,7 +278,7 @@ def main():
          '-framework', 'OpenGLES', '-framework', 'CoreGraphics', '-lobjc', '-lc++', '-lz'])
     run(['codesign', '-f', '-s', '-', library])
     (output / 'symbols.txt').write_text(run(['nm', '-n', library], capture=True).stdout)
-    provenance['frontend_revision'] = 'peridot-0150-single-plane-effect-capabilities'
+    provenance['frontend_revision'] = 'peridot-0151-ui-client-surface-and-effect-pipeline'
     provenance['library_sha256'] = hashlib.sha256(library.read_bytes()).hexdigest()
     provenance['compiler'] = run([clang, '--version'], capture=True).stdout
     provenance['build_dependencies'] = run(['python3', '-m', 'pip', 'freeze'], capture=True).stdout

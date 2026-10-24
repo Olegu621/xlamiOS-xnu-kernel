@@ -4,6 +4,28 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0151 grouped candidate: UI-client surface policy and missing effect shaders
+
+- User confirmed0149 actual phone interface is visible but strongly damaged.
+  User now requests larger combined steps.0150 CI40046584708 succeeded,
+  image da0146453242cf55b58992a62f2c5461060c7854f07ced039d032a3e042d9b3f
+  temporarily booted; hardware capture pending. Reset210/shot190 retained.
+-0151 explicitly stages the same versioned library for SpringBoard as well
+  as backboardd. Both processes initialize the exact20H392 guarded native
+  CIF10/deep capability policy before main. SpringBoard's constructor uses
+  its existing layer filter adapter and RETURNS WITHOUT making a GPU context.
+  This targets UI-client format properties surviving the server-only0149 fix.
+- The exact20H392 shader table audit now supports a guarded adapter for four
+  missing expressions: color matrix, vibrant color matrix and variable blur.
+  CacheUUID, native entry/switch bytes, original table pointer and all NULL/de
+  entries checked before any change. Two private pages acquired before writes;
+  original protections restored. Only table data changes, no instructions.
+  Legacy debug instruction hooks stay disabled. The one-pass blur adapter is
+  the upstream approximation, not proof of pixel-exact Apple effect matching.
+- Kernel patch0151 changes only the two-name explicit exec/dyld allowlists.
+  No all-process Mesa injection, display-driver replacement or Metal claim.
+  Full kernel/Mesa build and actual hardware result pending.
+
 ### 0150 candidate: single-plane offscreen effect capability negotiation
 
 -0149 fixed MAIN display format, but backboardd still creates b3a8 effect

@@ -1,0 +1,24 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -456,7 +456,9 @@
+     if (!library) return 0;
+     const char *path=imgp->ip_strings+strlen("executable_path="), *base=path;
+     for (const char *c=path;*c;++c) if (*c=='/') base=c+1;
+-    if (strcmp(base,"backboardd")) return 0;
++    /* UI-client capabilities must agree with the render server. The
++     * SpringBoard library branch never creates a second GPU context. */
++    if (strcmp(base,"backboardd") && strcmp(base,"SpringBoard")) return 0;
+     char insert[160];
+     int length=snprintf(insert,sizeof(insert),"DYLD_INSERT_LIBRARIES=%s",library);
+     if (length<0 || (size_t)length>=sizeof(insert)) return E2BIG;
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -314,7 +314,7 @@
+     if (call!=0x5a || !p || !peridot_gles_library()) return ENOPOLICY;
+     char name[32]={0};
+     proc_name(proc_pid(p),name,sizeof(name));
+-    if (strcmp(name,"backboardd")) return ENOPOLICY;
++    if (strcmp(name,"backboardd") && strcmp(name,"SpringBoard")) return ENOPOLICY;
+     uint64_t args[2],flags=0x7b;
+     if (copyin(argument,args,sizeof(args)) || !args[1]) return EFAULT;
+     return copyout(&flags,(user_addr_t)args[1],sizeof(flags));

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*20H392 distinguishes CIF10 support from the deep-framebuffer choice.
  * The FD735 frontend imports single-plane surfaces. Withhold both native
- * capabilities in this process without changing executable pages. */
+ * capabilities before either the display server or its UI client starts. */
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #include <stdint.h>
@@ -71,18 +71,26 @@ static void disable_cap(const uint8_t *cache, size_t length,
         cap->name, before, (unsigned long long)__atomic_load_n(once, __ATOMIC_ACQUIRE));
 }
 
-void peridot_surface_caps_install(void)
+const uint8_t *peridot_surface_cache(size_t *length)
 {
-    if (strcmp(getprogname(), "backboardd") != 0) return;
-    size_t length = 0;
-    const uint8_t *cache = _dyld_get_shared_cache_range(&length);
+    const uint8_t *cache = _dyld_get_shared_cache_range(length);
     static const uint8_t uuid[16] = {
         0x8f,0x97,0x04,0x52,0xc9,0xe3,0x3e,0x88,
         0xb1,0x14,0xfe,0xb1,0x86,0x4b,0xc9,0xe0};
-    if (!cache || length < 104 || memcmp(cache + 88, uuid, sizeof(uuid)) != 0) {
+    if (!cache || *length < 104 || memcmp(cache + 88, uuid, sizeof(uuid)) != 0) {
         sweet_drm_log("sweetgl: surface capabilities unchanged: unrecognized shared cache");
-        return;
+        return NULL;
     }
+    return cache;
+}
+
+void peridot_surface_caps_install(void)
+{
+    const char *process = getprogname();
+    if (strcmp(process, "backboardd") && strcmp(process, "SpringBoard")) return;
+    size_t length = 0;
+    const uint8_t *cache = peridot_surface_cache(&length);
+    if (!cache) return;
     static const struct native_surface_cap caps[] = {
         {"CIF10", UINT64_C(0x188378950), UINT64_C(0x1e1df6b88), UINT64_C(0x1e1df6ba0),
          112, 96, {0xa9bf7bfd,0x910003fd,0xf026bf20,0x91068000},
@@ -96,4 +104,5 @@ void peridot_surface_caps_install(void)
     setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
     for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); ++i)
         disable_cap(cache, length, &caps[i]);
+    sweet_drm_log("sweetgl: single-plane surface policy installed in %s", process);
 }
