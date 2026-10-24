@@ -70,6 +70,11 @@ def main():
     adb, fastboot = ['adb', '-s', serial], ['fastboot', '-s', serial]
     if run(adb + ['shell', 'id -u']).stdout.strip() != b'0':
         sys.exit('Recovery shell must be root')
+    pull = Path(__file__).resolve().with_name('sweet-log-pull.py')
+    before = a.out / 'console.before.txt'
+    baseline = run([sys.executable, str(pull), '-s', serial, str(before)], timeout=60, check=False)
+    (a.out / 'baseline-result.txt').write_bytes(baseline.stdout + baseline.stderr)
+    before_sha = hashlib.sha256(before.read_bytes()).hexdigest() if baseline.returncode == 0 else None
     original = run(adb + ['exec-out', 'dd if=/dev/block/by-name/misc bs=32 count=1 2>/dev/null']).stdout
     if len(original) != 32:
         sys.exit('Could not back up the BCB command')
@@ -106,11 +111,25 @@ def main():
             except (ValueError, IndexError):
                 ready = False
             if ready:
-                pull = Path(__file__).resolve().with_name('sweet-log-pull.py')
                 for _ in range(3):
                     r = run([sys.executable, str(pull), '-s', serial, str(a.out / 'console.txt')], timeout=60, check=False)
                     (a.out / 'pull-result.txt').write_bytes(r.stdout + r.stderr)
                     if r.returncode == 0:
+                        console = a.out / 'console.txt'
+                        after_sha = hashlib.sha256(console.read_bytes()).hexdigest()
+                        text = console.read_text(encoding='utf-8', errors='replace')
+                        same = before_sha is not None and after_sha == before_sha
+                        current_args = 'boot-args = ' + command_line in text
+                        result = {'before_sha256': before_sha, 'after_sha256': after_sha,
+                                  'unchanged_disk_log': same, 'current_userland_args': current_args,
+                                  'current_userland_log_verified': current_args and not same}
+                        (a.out / 'freshness.json').write_text(json.dumps(result, indent=2) + '\n')
+                        if same:
+                            sys.exit('Recovery returned, but disk console is unchanged from before boot; '
+                                     'this is a stale log, not this image\'s hardware result')
+                        if not current_args:
+                            sys.exit('Captured changed kernel log without current userland boot arguments; '
+                                     'inspect it as an incomplete boot, not a successful graphics cycle')
                         print(f'Captured console: {a.out / "console.txt"}', flush=True)
                         return 0
                     time.sleep(3)

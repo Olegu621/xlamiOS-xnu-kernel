@@ -1,0 +1,90 @@
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -19,6 +19,7 @@
+ #include <pexpert/pexpert.h>
+ 
+ extern "C" void sweet_secondary_entry(void);
++extern "C" void sweet_ramoops_init(void);
+ extern "C" boolean_t sweet_cpu_signal_is_enabled(unsigned int cpu);
+ 
+ class SweetCPU;
+@@ -61,6 +62,8 @@
+ bool
+ SweetCPU::start(IOService *provider)
+ {
++	/* Retain CPU_ON failures even if BSD/UFS cannot start. */
++	sweet_ramoops_init();
+ 	const ml_topology_info_t *topology = ml_get_topology_info();
+ 	OSNumber *logical = OSDynamicCast(OSNumber, provider->getProperty("logical-cpu-id"));
+ 	OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -926,10 +926,13 @@
+ 		/* The reset stub loads these through physical addresses with caches off.
+ 		 * Use VA range cleans to PoC, including on coherent-I/O builds. */
+ 		extern uint8_t bootstrap_pagetables[BOOTSTRAP_TABLE_SIZE];
++		extern boot_args const_boot_args;
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)CpuDataEntries, sizeof(CpuDataEntries));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)&ResetHandlerData, sizeof(ResetHandlerData));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)BootArgs, sizeof(*BootArgs));
++		/* reset_vector reads const_boot_args, not the original BootArgs. */
++		CleanPoC_DcacheRegion_Force((vm_offset_t)&const_boot_args, sizeof(const_boot_args));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)&sysreg_restore, sizeof(sysreg_restore));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)&cpu_ttep, sizeof(cpu_ttep));
+ 		CleanPoC_DcacheRegion_Force((vm_offset_t)bootstrap_pagetables, BOOTSTRAP_TABLE_SIZE);
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -49,7 +49,7 @@
+ extern void thread_deallocate(thread_t);
+ extern int hz;
+ static void sweet_log_start(void);
+-static void sweet_ramoops_init(void);
++void sweet_ramoops_init(void);
+ static void sweet_diag_start(void);
+ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+@@ -1155,6 +1155,7 @@
+ static volatile struct sweet_ramoops_header *sweet_ramoops;
+ static uint32_t sweet_ramoops_capacity;
+ static uint32_t _Atomic sweet_ramoops_busy;
++static uint32_t _Atomic sweet_ramoops_initializing;
+ 
+ static void
+ sweet_ramoops_append(const char *c, int size)
+@@ -1189,23 +1190,26 @@
+ 	sweet_ramoops_append(&c, 1);
+ }
+ 
+-static void
++void
+ sweet_ramoops_init(void)
+ {
+ 	DTEntry node;
+ 	uintptr_t const *reg = NULL;
+ 	unsigned int size = 0;
+ 	uint32_t on = 1;
++	if (!os_atomic_cmpxchg(&sweet_ramoops_initializing, 0, 1, acquire)) return;
+ 	PE_parse_boot_argn("sweetramoops", &on, sizeof(on));
+ 	if (!on || sweet_ramoops != NULL ||
+ 	    SecureDTLookupEntry(NULL, "/sweet-ramoops", &node) != kSuccess ||
+ 	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
+ 	    size != 2 * sizeof(uintptr_t) || reg[1] < PAGE_SIZE || reg[1] > (4u << 20)) {
++		os_atomic_store(&sweet_ramoops_initializing, 0, release);
+ 		return;
+ 	}
+ 	volatile struct sweet_ramoops_header *r =
+ 	    (volatile struct sweet_ramoops_header *)ml_io_map(reg[0], reg[1]);
+ 	if (r == NULL) {
++		os_atomic_store(&sweet_ramoops_initializing, 0, release);
+ 		return;
+ 	}
+ 	sweet_ramoops_capacity = (uint32_t)reg[1] - sizeof(*r);
+@@ -1226,6 +1230,7 @@
+ 	}
+ 	printf("SWEET RAMOOPS: console at 0x%lx, %u bytes, recovery pstore format\n",
+ 	    (unsigned long)reg[0], sweet_ramoops_capacity);
++	os_atomic_store(&sweet_ramoops_initializing, 0, release);
+ }
+ 
+ /* Called for all console output, any context: never blocks. */

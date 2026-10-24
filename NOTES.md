@@ -4,6 +4,49 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0151 eight-core attempt did NOT produce a fresh disk log;0153 next
+
+- cycle0151 returned to recovery before the expected full210s+startup cycle.
+  Its disk console is BYTE-IDENTICAL to0150:252138B, rawSHA
+  a5bf3f42a430927bdc63ab1a929943a9e449b6cb5d9fd275ae8edd8c53b0ace7.
+  It still says cpus1 and the previous library. Thus do NOT claim8cores,
+  new shader installation or a new panel result from that stale capture.
+  User did not watch. Actual failure point is UNKNOWN, probably before UFS.
+- Earlier0150 SHA1b039ada... was mistakenly calculated after newline
+  normalization; raw fileSHA is a5bf3f42... above.0151 result cannot be
+  inferred from those different text/raw hash methods.
+- peridot-cycle now reads the disk baseline before boot and records hashes
+  plus exact current userland boot arguments after return. Identical logs
+  and changed logs without current args fail explicitly; files are retained.
+- Read current root recovery CPU device tree: physical affinities0,100..700
+  DO match ADT. Native domains:0..2 domain0,3..6 domain1,7 domain2. Existing
+  ADT donor labels/clock estimates are not measured peridot frequencies.
+- Recovery ramoops parameters confirm actual0xa7000000/4MiB, console2MiB;
+  current ADT console region matches. pstore currently empty. Existing init
+  only runs in UFS startup, too late for CPU startup failure.
+-0153 initializes that same uncached reserved console before each SweetCPU
+  nub starts, with serialized init; preserves early CPU_ON/panic evidence.
+  It also cleans const_boot_args before PSCI CPU_ON: reset_vector actually
+  reads this copy, while existing CPU startup cleaned only original BootArgs.
+  Source-required publication fix; NOT yet proven to cure the8core failure.
+-0152/1c17d5f kernel CI40047817795 SUCCESS, not booted. Next153 combines its
+  GPU->CPU ownership correction,151 graphics/client package, early SMP log
+  and reset data publication. Keep cpus8/reset210/shot190. Build pending.
+
+### 0151 temporarily running with cpus=8
+
+- Kernel CI40047150032/a8ff591 SUCCESS,17,371,344B SHA
+  4cfe4644fe4570a5e98b12fdba8c4a32e906c73e2c967a75477ae70d0c9299cb.
+  Standard gh download stalled on the full60MB artifact; fetched only the
+  kernel and SHA member via IPv4 HTTP ranges, ZIP CRC and SHA both verified.
+  Private work/ci0151-direct. Original stalled gh download terminated.
+- Mesa15,217,216B SHA951f8100ef06a1403f2ecd182eb0c3307d86e7315ac2f61e11ae333717a3c624.
+  Image2ffca8cec84e2ae4ed42610109f6761896fdcece014f2f8929d7693a4ba2b606.
+  cpus8, reset210, shot190, nativeGPU21/GLES1; temporary fastboot boot accepted.
+  Actual core count, texture-table installation and frame pending cycle0151.
+-0152 cache-ownership source1c17d5f pushed, kernel CI40047817795 building;
+  it reuses0151 Mesa. No0152 boot yet. Builder0152 already requests8cores.
+
 ### 0152 GPU-to-CPU ownership and explicit eight-core request
 
 - User explicitly requested all8 cores after the FPS discussion. Next images
