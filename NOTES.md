@@ -4,6 +4,26 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0152 GPU-to-CPU ownership and explicit eight-core request
+
+- User explicitly requested all8 cores after the FPS discussion. Next images
+  use cpus=8; previous actual0150 log proves requested=1/selected=1 and1/1.
+  Current ADT already has8 nodes. Actual peridot8/8 bring-up is NOT proven
+  by historical sweet SMP results. Keep210s reset /190s capture and record
+  which CPUs actually enter XNU before claiming8-core operation.
+-0151 Mesa40047150033 and kernel40047150032 SUCCESS. Kernel download in
+  progress, work/ci0151. Builder0151 now cpus=8. No0151 hardware outcome yet.
+-0152 adds the missing completed GPU->CPU ownership maintenance to every
+  listed BO BEFORE publishing its returned sequence. peridot_gpu_submit
+  already waits for every real GPU-written fence. Existing flush_dcache64
+  performs real64-byte DC CIVAC +DSB SY on our compiled0147 kernel. This
+  addresses CPU cache lines refilled by the scanout worker during rendering;
+  it is a correctness candidate, not a measured FPS improvement or proven
+  explanation of every missing glyph. Existing pre-submit maintenance kept.
+- No new buffer ABI or process GPU connection. Reuse0151 Mesa with0152
+  kernel. Existing CPU scaling/copy and sweetfb_hz15 still limit scanout;
+  glFinish/raw submission serialization also remain. No60FPS/Metal claim.
+
 ### 0150 actual result and0151 build status
 
 -0150 completed full210s and returned to recovery. Both native caps1->0,

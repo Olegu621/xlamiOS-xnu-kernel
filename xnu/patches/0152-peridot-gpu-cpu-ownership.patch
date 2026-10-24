@@ -1,0 +1,22 @@
+--- a/iokit/Kernel/arm/PeridotGPU.cpp
++++ b/iokit/Kernel/arm/PeridotGPU.cpp
+@@ -224,7 +224,18 @@
+     uint32_t sequence=0;
+     int status=peridot_gpu_submit(ibs,num_ibs,&sequence);
+     if (status) return status==EINVAL ? kIOReturnBadArgument : kIOReturnNotReady;
+-    for (unsigned i=0;i<num_bos;++i) bo(handles[i])->sequence=sequence;
++    /* The native submit has waited for each real GPU-written chunk fence.
++     * Return ownership to CPU aliases only after that completion. The
++     * scanout worker can have refilled clean lines while the GPU rendered;
++     * pre-submit maintenance alone cannot make those aliases fresh. */
++    for (unsigned i=0;i<num_bos;++i) {
++        pg_client_bo *entry=bo(handles[i]);
++        clean(entry);
++        entry->sequence=sequence;
++    }
++    static unsigned published;
++    if (published++<4) IOLog("PERIDOT GPU: completed fence=%u returned %u BOs to CPU ownership\n",
++        sequence,num_bos);
+     fLastSequence=sequence;*out=sequence;
+     return kIOReturnSuccess;
+ }
