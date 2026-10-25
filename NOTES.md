@@ -4,6 +4,21 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0174 scoped PackageType (System for system apps, Customer for BlockBlast) and 0644 rufsroot0 (2026-10-25)
+
+- Hardware Run 0173 SUCCESS:
+  - Phone booted into native iOS 16 UI with clock 4:03 and battery 100%. Apple logo freeze eliminated!
+  - Restored kernel SHA 0f2a4996e866e01bce815a58e23ae9139cd398e0258201bad46d50b427d3a30b verified.
+  - Image SHA 37521e30fd9cc76b55faa0cfeaefa33795826e6afb08149b7dc5540fa1d3ed7b. Auto recovery in 277.75s.
+  - Decoded screenshot POCO-F6-0173.png shows active iOS 16 UI, status bar, and dock.
+  - Hardware evidence from /private/var/mobile/Library/xlamiOS-Restore0172/:
+    1. Both MobileCal and Weather threw Code 25 "Attempted to install a deletable system app with incorrect install type" because PackageType: Customer was passed to deletable system apps.
+    2. BlockBlast: failed with errno=13 (rufsroot0 0640).
+- Fixes implemented in 0174:
+  1. In ui_restore_worker.m: MobileCal uses default package type (nil), Weather uses @"System", BlockBlast uses @"Customer".
+  2. In kernel.development.sweet: patched ONLY 0x4ed2cc (rufsroot0 character dev) to 0644 (0x1a4 = 0x52803484 = 84 34 80 52), keeping ufsroot0 (block dev) strictly 0640.
+  3. Advanced helper version to 174 and root to xlamiOS-Restore0174.
+
 ### 0172 0666 raw disk access, PackageType Customer, strip Extensions; 0171 hardware result (2026-10-25)
 
 - 0171 commit e8bed95, Mesa CI 40151373879 SUCCESS (build 2m 50s).

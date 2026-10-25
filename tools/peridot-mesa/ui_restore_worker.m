@@ -195,7 +195,7 @@ static NSString *installedPath(NSString *identifier)
     return [info[@"CFBundleIdentifier"] isEqual:identifier] ? path : nil;
 }
 
-static NSDictionary *installHost(id workspace, NSString *root, NSString *name, NSString *identifier)
+static NSDictionary *installHost(id workspace, NSString *root, NSString *name, NSString *identifier, NSString *packageType)
 {
     NSString *present = installedPath(identifier);
     if (present) return @{ @"status": @"already-installed", @"path": present };
@@ -222,12 +222,14 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
             [fm removeItemAtPath:subPath error:nil];
         }
     }
-    sweet_drm_log("UIRestore: native install begin %s; original staged bundle retained", identifier.UTF8String);
+    sweet_drm_log("UIRestore: native install begin %s (pkg=%s); original staged bundle retained",
+        identifier.UTF8String, packageType ? packageType.UTF8String : "none");
     BOOL ok = NO;
-    NSDictionary *options = @{
-        @"CFBundleIdentifier": identifier,
-        @"PackageType": @"Customer",
-    };
+    NSMutableDictionary *options = [NSMutableDictionary dictionary];
+    options[@"CFBundleIdentifier"] = identifier;
+    if (packageType && ![packageType isKindOfClass:[NSNull class]]) {
+        options[@"PackageType"] = packageType;
+    }
     @try {
         ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
     } @catch (NSException *exception) {
@@ -286,7 +288,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0172";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0174";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -307,9 +309,9 @@ static BOOL restoreUserInterface(void)
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
-            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal"],
-                                    @[@"Weather.app", @"com.apple.weather"],
-                                    @[@"BlockBlast.app", @"com.blockblast.vn.ios"]]) {
+            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal", [NSNull null]],
+                                    @[@"Weather.app", @"com.apple.weather", @"System"],
+                                    @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]]) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
                 if (attempts >= 2 && !installedPath(host[1])) {
                     report[host[1]] = previous[host[1]];
@@ -322,7 +324,8 @@ static BOOL restoreUserInterface(void)
                 if (![report writeToFile:reportPath atomically:YES]) {
                     sweet_drm_log("UIRestore: attempt journal failed; native install skipped"); success = NO; continue;
                 }
-                NSMutableDictionary *result = [installHost(workspace, root, host[0], host[1]) mutableCopy];
+                id pkg = host.count > 2 ? host[2] : nil;
+                NSMutableDictionary *result = [installHost(workspace, root, host[0], host[1], pkg) mutableCopy];
                 result[@"attempts"] = @(attempts + 1);
                 if (![result[@"status"] isEqual:@"installed"] && ![result[@"status"] isEqual:@"already-installed"]) success = NO;
                 report[host[1]] = result;
