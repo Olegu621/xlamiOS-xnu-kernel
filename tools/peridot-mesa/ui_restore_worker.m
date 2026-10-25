@@ -25,6 +25,11 @@ static dispatch_semaphore_t wallpaperObserved;
 - (NSURL *)bundleURL;
 - (BOOL)isPlaceholder;
 - (BOOL)isInstalled;
+- (long)position;
+- (BOOL)isHeadless;
+- (BOOL)isLowPower;
+- (NSString *)name;
+- (NSString *)localizedName;
 @end
 
 static BOOL methodShape(Class cls, SEL selector, BOOL factory, unsigned args, char type)
@@ -357,7 +362,7 @@ static void probeMetalHardware(void)
         sweet_drm_log("UIRestore: MTLCopyAllDevices found %lu device(s)", (unsigned long)devices.count);
         for (id dev in devices) {
             sweet_drm_log("UIRestore: Metal device: %s (headless=%d, lowPower=%d)",
-                [[dev name] UTF8String] ?: "unnamed", [dev isHeadless], [dev isLowPower]);
+                [[dev name] UTF8String] ?: "unnamed", (int)[dev isHeadless], (int)[dev isLowPower]);
         }
     }
     typedef id (*CreateDefaultFn)(void);
