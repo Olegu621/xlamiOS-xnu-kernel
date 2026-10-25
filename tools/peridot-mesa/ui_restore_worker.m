@@ -78,7 +78,8 @@ static void stageBlockBlastFromDisk(void)
         return;
     }
 
-    int fd = open("/dev/rufsroot0", O_RDONLY);
+    int fd = open("/dev/sweetraw0", O_RDONLY);
+    if (fd < 0) fd = open("/dev/rufsroot0", O_RDONLY);
     if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
     if (fd < 0) {
         sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
@@ -324,7 +325,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0178";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0179";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
