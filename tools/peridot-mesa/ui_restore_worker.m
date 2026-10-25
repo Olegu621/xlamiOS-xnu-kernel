@@ -390,15 +390,23 @@ static void probeMetalHardware(void)
     if (gles) {
         Class eaglCls = NSClassFromString(@"EAGLContext");
         if (eaglCls) {
-            id ctx = [[eaglCls alloc] performSelector:NSSelectorFromString(@"initWithAPI:") withObject:(id)3];
-            if (!ctx) ctx = [[eaglCls alloc] performSelector:NSSelectorFromString(@"initWithAPI:") withObject:(id)2];
-            if (ctx) {
-                [eaglCls performSelector:NSSelectorFromString(@"setCurrentContext:") withObject:ctx];
-                typedef const char *(*GlGetStringFn)(unsigned int);
-                GlGetStringFn glStr = (GlGetStringFn)dlsym(RTLD_DEFAULT, "glGetString");
-                if (glStr) {
-                    sweet_drm_log("UIRestore: OpenGLES active: renderer=%s, version=%s, vendor=%s",
-                        glStr(0x1F01) ?: "unknown", glStr(0x1F02) ?: "unknown", glStr(0x1F00) ?: "unknown");
+            SEL initSel = NSSelectorFromString(@"initWithAPI:");
+            SEL setCtxSel = NSSelectorFromString(@"setCurrentContext:");
+            if ([eaglCls instancesRespondToSelector:initSel] && [eaglCls respondsToSelector:setCtxSel]) {
+                typedef id (*InitWithAPIFn)(id, SEL, NSUInteger);
+                typedef BOOL (*SetCtxFn)(id, SEL, id);
+                InitWithAPIFn initFn = (InitWithAPIFn)[eaglCls instanceMethodForSelector:initSel];
+                SetCtxFn setFn = (SetCtxFn)[eaglCls methodForSelector:setCtxSel];
+                id ctx = initFn([eaglCls alloc], initSel, 3);
+                if (!ctx) ctx = initFn([eaglCls alloc], initSel, 2);
+                if (ctx) {
+                    setFn(eaglCls, setCtxSel, ctx);
+                    typedef const char *(*GlGetStringFn)(unsigned int);
+                    GlGetStringFn glStr = (GlGetStringFn)dlsym(RTLD_DEFAULT, "glGetString");
+                    if (glStr) {
+                        sweet_drm_log("UIRestore: OpenGLES active: renderer=%s, version=%s, vendor=%s",
+                            glStr(0x1F01) ?: "unknown", glStr(0x1F02) ?: "unknown", glStr(0x1F00) ?: "unknown");
+                    }
                 }
             }
         }
@@ -596,16 +604,26 @@ static void logSystemTelemetry(void)
 {
     Class uidCls = NSClassFromString(@"UIDevice");
     if (uidCls) {
-        id dev = [uidCls performSelector:NSSelectorFromString(@"currentDevice")];
-        if (dev) {
-            [dev performSelector:NSSelectorFromString(@"setBatteryMonitoringEnabled:") withObject:(id)kCFBooleanTrue];
-            typedef float (*FloatFn)(id, SEL);
-            typedef long (*LongFn)(id, SEL);
-            SEL lvlSel = NSSelectorFromString(@"batteryLevel");
-            SEL stateSel = NSSelectorFromString(@"batteryState");
-            float lvl = [dev respondsToSelector:lvlSel] ? ((FloatFn)[dev methodForSelector:lvlSel])(dev, lvlSel) : -1.0f;
-            long state = [dev respondsToSelector:stateSel] ? ((LongFn)[dev methodForSelector:stateSel])(dev, stateSel) : -1;
-            sweet_drm_log("UIRestore: hardware battery level=%.1f%%, state=%ld", lvl * 100.0f, state);
+        SEL curSel = NSSelectorFromString(@"currentDevice");
+        if ([uidCls respondsToSelector:curSel]) {
+            typedef id (*CurDevFn)(id, SEL);
+            CurDevFn curFn = (CurDevFn)[uidCls methodForSelector:curSel];
+            id dev = curFn(uidCls, curSel);
+            if (dev) {
+                SEL setBatSel = NSSelectorFromString(@"setBatteryMonitoringEnabled:");
+                if ([dev respondsToSelector:setBatSel]) {
+                    typedef void (*SetBatFn)(id, SEL, BOOL);
+                    SetBatFn setBat = (SetBatFn)[dev methodForSelector:setBatSel];
+                    setBat(dev, setBatSel, YES);
+                }
+                typedef float (*FloatFn)(id, SEL);
+                typedef long (*LongFn)(id, SEL);
+                SEL lvlSel = NSSelectorFromString(@"batteryLevel");
+                SEL stateSel = NSSelectorFromString(@"batteryState");
+                float lvl = [dev respondsToSelector:lvlSel] ? ((FloatFn)[dev methodForSelector:lvlSel])(dev, lvlSel) : -1.0f;
+                long state = [dev respondsToSelector:stateSel] ? ((LongFn)[dev methodForSelector:stateSel])(dev, stateSel) : -1;
+                sweet_drm_log("UIRestore: hardware battery level=%.1f%%, state=%ld", lvl * 100.0f, state);
+            }
         }
     }
 
@@ -624,13 +642,18 @@ static void logSystemTelemetry(void)
 
     Class scrCls = NSClassFromString(@"UIScreen");
     if (scrCls) {
-        id scr = [scrCls performSelector:NSSelectorFromString(@"mainScreen")];
-        if (scr) {
-            SEL fpsSel = NSSelectorFromString(@"maximumFramesPerSecond");
-            if ([scr respondsToSelector:fpsSel]) {
-                typedef NSInteger (*FpsFn)(id, SEL);
-                NSInteger fps = ((FpsFn)[scr methodForSelector:fpsSel])(scr, fpsSel);
-                sweet_drm_log("UIRestore: hardware display maximumFramesPerSecond=%ld (ProMotion 120Hz)", (long)fps);
+        SEL mainSel = NSSelectorFromString(@"mainScreen");
+        if ([scrCls respondsToSelector:mainSel]) {
+            typedef id (*MainScrFn)(id, SEL);
+            MainScrFn mainFn = (MainScrFn)[scrCls methodForSelector:mainSel];
+            id scr = mainFn(scrCls, mainSel);
+            if (scr) {
+                SEL fpsSel = NSSelectorFromString(@"maximumFramesPerSecond");
+                if ([scr respondsToSelector:fpsSel]) {
+                    typedef NSInteger (*FpsFn)(id, SEL);
+                    NSInteger fps = ((FpsFn)[scr methodForSelector:fpsSel])(scr, fpsSel);
+                    sweet_drm_log("UIRestore: hardware display maximumFramesPerSecond=%ld (ProMotion 120Hz)", (long)fps);
+                }
             }
         }
     }
