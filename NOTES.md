@@ -4,6 +4,22 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0169 specify bundle identifier in native install options; 0168 hardware result (2026-10-25)
+
+- 0168 commit e61e273, Mesa CI 40141608212 SUCCESS.
+  Image SHA b54253f612b5cae735a437b66eeba461efe7d03bf4caa6818a2a3cf9f005be5b.
+  Timed reset 210s; total console 5,099,438 bytes (ring buffer wrapped, operation steady).
+  GPU sweetgl sustained 15-22 flushes/s, >3000 HWSCHED commands executed without panic.
+  Touchscreen: 1904 reports, 0 drops. Framebuffer screenshot at 190s (POCO-F6-0168.png):
+  display power=1, 17 distinct colors rendered.
+- Scoped entitlement helper xlamiOS-restore executed successfully:
+  "helper own InstallForLaunchServices entitlement=1". The 0167 entitlement refusal
+  _LSValidateEntitlementsOfConnectionForVanillaInstall is completely RESOLVED.
+- MIClientConnection accepted the client connection, but returned MIInstallerErrorDomain
+  Code 25: "Install options did not specify a bundle identifier for the install of .../MobileCal.app".
+- 0169 passes explicit @{ @"CFBundleIdentifier": identifier } in installApplication:withOptions:error:,
+  advances root directory to xlamiOS-Restore0169 and helper version to 169.
+
 ### 0168 entitled native client prepared; 0167 hardware refusal (2026-10-25)
 
 - 0167 commit4d923492a563150e1391a61b8fb242d6b27be49b, MesaCI40140234609 SUCCESS.

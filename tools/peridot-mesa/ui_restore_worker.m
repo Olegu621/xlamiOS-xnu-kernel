@@ -75,8 +75,9 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
     }
     sweet_drm_log("UIRestore: native install begin %s; original staged bundle retained", identifier.UTF8String);
     BOOL ok = NO;
+    NSDictionary *options = @{ @"CFBundleIdentifier": identifier };
     @try {
-        ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:@{} error:&error];
+        ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
     } @catch (NSException *exception) {
         error = [NSError errorWithDomain:@"xlamiOS.UIRestore" code:1 userInfo:
             @{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""] }];
@@ -133,7 +134,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0168";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0169";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
