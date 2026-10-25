@@ -215,14 +215,19 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
         return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
     }
-    /* Remove all PlugIns from staged app bundle so missing system extension point definitions don't block app installation */
-    NSString *pluginsPath = [stage stringByAppendingPathComponent:@"PlugIns"];
-    if ([fm fileExistsAtPath:pluginsPath]) {
-        [fm removeItemAtPath:pluginsPath error:nil];
+    /* Remove all PlugIns and Extensions from staged app bundle so missing system extension point definitions don't block app installation */
+    for (NSString *sub in @[@"PlugIns", @"Extensions"]) {
+        NSString *subPath = [stage stringByAppendingPathComponent:sub];
+        if ([fm fileExistsAtPath:subPath]) {
+            [fm removeItemAtPath:subPath error:nil];
+        }
     }
     sweet_drm_log("UIRestore: native install begin %s; original staged bundle retained", identifier.UTF8String);
     BOOL ok = NO;
-    NSDictionary *options = @{ @"CFBundleIdentifier": identifier };
+    NSDictionary *options = @{
+        @"CFBundleIdentifier": identifier,
+        @"PackageType": @"Customer",
+    };
     @try {
         ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
     } @catch (NSException *exception) {
@@ -281,7 +286,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0171";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0172";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }

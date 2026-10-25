@@ -4,6 +4,27 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0172 0666 raw disk access, PackageType Customer, strip Extensions; 0171 hardware result (2026-10-25)
+
+- 0171 commit e8bed95, Mesa CI 40151373879 SUCCESS (build 2m 50s).
+  Image SHA 9a8eba1bf39eb57d986eb4b76d271b2a2bc698d64d7510017d645e1264b7177f.
+  Auto recovery 278.032s; fresh console SHA b31d6ac548c79997c3ce519438c49b92f3c68ae49c6a0477c2d8efe6fd7ba2d5.
+  Current userland log verified. Screenshot POCO-F6-0171.png decoded (real iOS 16 Settings -> Home Screen rendered on screen!).
+- Hardware diagnosis of 0171 helper log:
+  1. BlockBlast: open("/dev/rufsroot0") failed with errno=13 (EACCES: Permission Denied).
+     Root cause: /dev/rufsroot0 devfs node has permissions 0640 (root:operator). SpringBoard launches
+     xlamiOS-restore as user mobile (uid=501), which cannot open 0640 block/char devices.
+     Fix in 0172: Patched XNU kernel devfs_make_node for ufsroot0 (0x4ed2a8) and rufsroot0 (0x4ed2cc)
+     from 0x52803404 (mov w4, #0x1a0 = 0640) to 0x528036c4 (mov w4, #0x1b6 = 0666).
+     Now mobile can read the raw disk archive directly from offset 32GB on flash.
+  2. MobileCal: PlugIns/ stripping worked, but iOS 16 also bundles ExtensionKit extensions under Extensions/:
+     MobileCal.app/Extensions/CalendarFocusConfigurationExtension.appex failed with Code 59.
+     Fix in 0172: Strips both PlugIns/ and Extensions/ from staged bundle before installApplication:.
+  3. Weather: Code 25 "Attempted to install a deletable system app with incorrect install type."
+     Root cause: installd checks PackageType for deletable system apps; defaulting to developer/none fails.
+     Fix in 0172: passes options @{ @"CFBundleIdentifier": identifier, @"PackageType": @"Customer" }.
+- Advanced root to xlamiOS-Restore0172 and helper version to 172.
+
 ### 0171 install BlockBlast and strip all PlugIns for clean native install; 0170 hardware result (2026-10-25)
 
 - 0170 commit 592e5e0, Mesa CI 40150194154 SUCCESS (build 2m 51s).
