@@ -4,6 +4,29 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0171 install BlockBlast and strip all PlugIns for clean native install; 0170 hardware result (2026-10-25)
+
+- 0170 commit 592e5e0, Mesa CI 40150194154 SUCCESS (build 2m 51s).
+  Image SHA e1f1f11bf9fe04b55ad6130f5cb72281275d8011e1f698d36662bc83e7c818a9.
+  Auto recovery 278.547s; fresh console SHA 79a6d6985c5eba6957d06728e1b7c1c47b1961086e6ede45f9d83085f3d0daca.
+  Current userland log verified. Screenshot POCO-F6-0170.png decoded.
+- MobileInstallation verified: stripping *DiagnosticExtension.appex worked!
+  installd then checked the remaining plugins:
+  CalendarWidgetExtension.appex failed with Code 59 (unknown extension point: com.apple.widgetkit-extension).
+  WeatherIntents.appex failed with Code 59 (unknown extension point: com.apple.intents-service).
+  Root cause: in this minimal/hacked iOS userland, extension point definitions for widgets/intents
+  are not registered in pkd/ExtensionKit, so ANY app extension in PlugIns/ fails validation.
+  The apps themselves (MobileCal, Weather) are complete standalone applications that run cleanly without PlugIns.
+- 0171 strips the entire PlugIns/ directory from staged app bundles before installApplication:,
+  allowing MobileInstallation to install the base applications cleanly without Code 59 errors.
+- Block Blast game integration:
+  Acquired decrypted arm64 IPA (com.blockblast.vn.ios / fangkuaipintu-mobile.app, 153.5 MB tar).
+  Inspected structure: zero PlugIns (PlugIns: []), minimum iOS 15.0, OpenGL ES / Cocos2d-x engine.
+  Staged BlockBlast.tar to offset 32GB on /dev/block/sda31 (154 MB transferred at 177.1 MB/s, verified SHA256).
+  ui_restore_worker 0171 automatically unpacks BlockBlast.app from /dev/rufsroot0 at offset 32GB into
+  /private/var/staged_system_apps/BlockBlast.app, then installs it via MobileInstallation alongside Calendar and Weather.
+- Advanced root to xlamiOS-Restore0171 and helper version to 171.
+
 ### 0170 strip unsupported diagnostic appex; 0169 hardware result (2026-10-25)
 
 - 0169 commit 2edcfa6, Mesa CI 40149318886 SUCCESS.

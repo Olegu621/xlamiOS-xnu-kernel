@@ -1,15 +1,17 @@
 /* SPDX-License-Identifier: MIT */
-/* Restore known staged widget hosts using iOS's installer, never raw disk writes. */
+/* Restore known staged widget hosts and applications using iOS's installer, never raw disk writes. */
 #import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <objc/runtime.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #define sweet_drm_log(...) do { printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 static dispatch_semaphore_t wallpaperObserved;
 
@@ -35,6 +37,146 @@ static BOOL realDirectory(NSString *path)
 {
     struct stat st;
     return !lstat(path.fileSystemRepresentation, &st) && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode);
+}
+
+static void mkdirs(const char *path)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
+static void stageBlockBlastFromDisk(void)
+{
+    NSString *dest = @"/private/var/staged_system_apps/BlockBlast.app";
+    if (realDirectory(dest)) {
+        sweet_drm_log("UIRestore: BlockBlast already staged on disk");
+        return;
+    }
+
+    int fd = open("/dev/rufsroot0", O_RDONLY);
+    if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
+    if (fd < 0) {
+        sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
+        return;
+    }
+
+    off_t offset = 32ULL * 1024 * 1024 * 1024;
+    if (lseek(fd, offset, SEEK_SET) != offset) {
+        sweet_drm_log("UIRestore: failed to seek to 32GB errno=%d", errno);
+        close(fd);
+        return;
+    }
+
+    struct {
+        char magic[16];
+        uint32_t version;
+        uint32_t flags;
+        uint64_t tar_size;
+        uint8_t sha256[32];
+    } __attribute__((packed)) hdr;
+
+    if (read(fd, &hdr, 512) != 512) {
+        sweet_drm_log("UIRestore: short read on BlockBlast header");
+        close(fd);
+        return;
+    }
+
+    if (memcmp(hdr.magic, "XLAM_BLOCKBLAST\0", 16) != 0) {
+        sweet_drm_log("UIRestore: BlockBlast header magic mismatch");
+        close(fd);
+        return;
+    }
+
+    sweet_drm_log("UIRestore: unpacking BlockBlast from flash offset 32GB (size %llu)...", (unsigned long long)hdr.tar_size);
+
+    NSString *outDir = @"/private/var/staged_system_apps";
+    mkdir(outDir.fileSystemRepresentation, 0755);
+
+    uint64_t bytesLeft = hdr.tar_size;
+    char block[512];
+    while (bytesLeft >= 512) {
+        if (read(fd, block, 512) != 512) break;
+        bytesLeft -= 512;
+
+        if (block[0] == '\0') {
+            bool allZero = true;
+            for (int i = 0; i < 512; ++i) {
+                if (block[i] != 0) { allZero = false; break; }
+            }
+            if (allZero) break;
+        }
+
+        char name[512];
+        if (block[345] != '\0') {
+            snprintf(name, sizeof(name), "%s/%.155s/%.100s", outDir.UTF8String, block + 345, block);
+        } else {
+            snprintf(name, sizeof(name), "%s/%.100s", outDir.UTF8String, block);
+        }
+
+        uint64_t fileSize = 0;
+        for (int i = 124; i < 135; ++i) {
+            if (block[i] >= '0' && block[i] <= '7')
+                fileSize = (fileSize << 3) | (block[i] - '0');
+        }
+
+        mode_t mode = 0755;
+        if (block[100] >= '0' && block[100] <= '7') {
+            mode = 0;
+            for (int i = 100; i < 107; ++i) {
+                if (block[i] >= '0' && block[i] <= '7')
+                    mode = (mode << 3) | (block[i] - '0');
+            }
+        }
+
+        char typeflag = block[156];
+        if (typeflag == '5') {
+            mkdirs(name);
+        } else if (typeflag == '2') {
+            char linkTarget[101];
+            memcpy(linkTarget, block + 157, 100);
+            linkTarget[100] = '\0';
+            unlink(name);
+            symlink(linkTarget, name);
+        } else if (typeflag == '0' || typeflag == '\0') {
+            char *lastSlash = strrchr(name, '/');
+            if (lastSlash) {
+                *lastSlash = '\0';
+                mkdirs(name);
+                *lastSlash = '/';
+            }
+            int outFd = open(name, O_WRONLY | O_CREAT | O_TRUNC, mode ?: 0644);
+            uint64_t fileRemaining = fileSize;
+            uint64_t padBlocks = (fileSize + 511) / 512;
+            for (uint64_t b = 0; b < padBlocks; ++b) {
+                if (bytesLeft < 512) break;
+                if (read(fd, block, 512) != 512) break;
+                bytesLeft -= 512;
+                if (outFd >= 0 && fileRemaining > 0) {
+                    size_t toWrite = fileRemaining < 512 ? fileRemaining : 512;
+                    write(outFd, block, toWrite);
+                    fileRemaining -= toWrite;
+                }
+            }
+            if (outFd >= 0) close(outFd);
+        } else {
+            uint64_t padBlocks = (fileSize + 511) / 512;
+            for (uint64_t b = 0; b < padBlocks; ++b) {
+                if (bytesLeft < 512) break;
+                if (read(fd, block, 512) != 512) break;
+                bytesLeft -= 512;
+            }
+        }
+    }
+    close(fd);
+    sweet_drm_log("UIRestore: BlockBlast unpacking finished, verified=%u", realDirectory(dest));
 }
 
 static NSString *installedPath(NSString *identifier)
@@ -73,12 +215,10 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
         return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
     }
-    /* Remove known unsupported diagnostic extensions that lack system-level extension point definitions */
+    /* Remove all PlugIns from staged app bundle so missing system extension point definitions don't block app installation */
     NSString *pluginsPath = [stage stringByAppendingPathComponent:@"PlugIns"];
-    for (NSString *sub in [fm contentsOfDirectoryAtPath:pluginsPath error:nil]) {
-        if ([sub containsString:@"DiagnosticExtension"]) {
-            [fm removeItemAtPath:[pluginsPath stringByAppendingPathComponent:sub] error:nil];
-        }
+    if ([fm fileExistsAtPath:pluginsPath]) {
+        [fm removeItemAtPath:pluginsPath error:nil];
     }
     sweet_drm_log("UIRestore: native install begin %s; original staged bundle retained", identifier.UTF8String);
     BOOL ok = NO;
@@ -141,14 +281,17 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0170";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0171";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
             } else if (errno != ENOENT || mkdir(root.fileSystemRepresentation, 0700)) {
                 sweet_drm_log("UIRestore: root creation failed errno=%d", errno); return NO;
             }
+
+            stageBlockBlastFromDisk();
             restoreWallpaper(root);
+
             Class cls = NSClassFromString(@"LSApplicationWorkspace");
             if (!methodShape(cls, @selector(defaultWorkspace), YES, 2, '@') ||
                 !methodShape(cls, @selector(installApplication:withOptions:error:), NO, 5, 'B')) {
@@ -160,7 +303,8 @@ static BOOL restoreUserInterface(void)
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
             for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal"],
-                                    @[@"Weather.app", @"com.apple.weather"]]) {
+                                    @[@"Weather.app", @"com.apple.weather"],
+                                    @[@"BlockBlast.app", @"com.blockblast.vn.ios"]]) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
                 if (attempts >= 2 && !installedPath(host[1])) {
                     report[host[1]] = previous[host[1]];
@@ -179,7 +323,7 @@ static BOOL restoreUserInterface(void)
                 report[host[1]] = result;
                 [report writeToFile:reportPath atomically:YES];
             }
-            sweet_drm_log("UIRestore: host restoration attempts finished; widget timelines require separate verification");
+            sweet_drm_log("UIRestore: host restoration attempts finished; verification pending");
             return success;
         }
 }
