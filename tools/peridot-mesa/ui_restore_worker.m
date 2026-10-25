@@ -53,6 +53,23 @@ static void mkdirs(const char *path)
     mkdir(tmp, 0755);
 }
 
+static void dumpClassMethods(Class cls)
+{
+    if (!cls) return;
+    sweet_drm_log("UIRestore: class %s", class_getName(cls));
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        sweet_drm_log("  - %s", sel_getName(method_getName(methods[i])));
+    }
+    free(methods);
+    Method *classMethods = class_copyMethodList(object_getClass((id)cls), &count);
+    for (unsigned int i = 0; i < count; i++) {
+        sweet_drm_log("  + %s", sel_getName(method_getName(classMethods[i])));
+    }
+    free(classMethods);
+}
+
 static void stageBlockBlastFromDisk(void)
 {
     NSString *dest = @"/private/var/staged_system_apps/BlockBlast.app";
@@ -67,6 +84,7 @@ static void stageBlockBlastFromDisk(void)
         sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
         return;
     }
+    sweet_drm_log("UIRestore: raw disk device opened successfully fd=%d", fd);
 
     off_t offset = 32ULL * 1024 * 1024 * 1024;
     if (lseek(fd, offset, SEEK_SET) != offset) {
@@ -84,13 +102,13 @@ static void stageBlockBlastFromDisk(void)
     } __attribute__((packed)) hdr;
 
     if (read(fd, &hdr, 512) != 512) {
-        sweet_drm_log("UIRestore: short read on BlockBlast header");
+        sweet_drm_log("UIRestore: short read on BlockBlast header errno=%d", errno);
         close(fd);
         return;
     }
 
     if (memcmp(hdr.magic, "XLAM_BLOCKBLAST\0", 16) != 0) {
-        sweet_drm_log("UIRestore: BlockBlast header magic mismatch");
+        sweet_drm_log("UIRestore: BlockBlast header magic mismatch: %.16s", hdr.magic);
         close(fd);
         return;
     }
@@ -101,6 +119,7 @@ static void stageBlockBlastFromDisk(void)
     mkdir(outDir.fileSystemRepresentation, 0755);
 
     uint64_t bytesLeft = hdr.tar_size;
+    uint32_t filesCount = 0;
     char block[512];
     while (bytesLeft >= 512) {
         if (read(fd, block, 512) != 512) break;
@@ -145,6 +164,7 @@ static void stageBlockBlastFromDisk(void)
             linkTarget[100] = '\0';
             unlink(name);
             symlink(linkTarget, name);
+            filesCount++;
         } else if (typeflag == '0' || typeflag == '\0') {
             char *lastSlash = strrchr(name, '/');
             if (lastSlash) {
@@ -166,6 +186,7 @@ static void stageBlockBlastFromDisk(void)
                 }
             }
             if (outFd >= 0) close(outFd);
+            filesCount++;
         } else {
             uint64_t padBlocks = (fileSize + 511) / 512;
             for (uint64_t b = 0; b < padBlocks; ++b) {
@@ -176,7 +197,8 @@ static void stageBlockBlastFromDisk(void)
         }
     }
     close(fd);
-    sweet_drm_log("UIRestore: BlockBlast unpacking finished, verified=%u", realDirectory(dest));
+    sweet_drm_log("UIRestore: BlockBlast unpacking finished, verified=%u (unpacked %u files)",
+        realDirectory(dest), filesCount);
 }
 
 static NSString *installedPath(NSString *identifier)
@@ -232,6 +254,25 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
             @{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""] }];
     }
     present = installedPath(identifier);
+    if (!ok || !present) {
+        if ([workspace respondsToSelector:@selector(registerApplicationDictionary:)]) {
+            NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:[stage stringByAppendingPathComponent:@"Info.plist"]];
+            if (plist) {
+                typedef BOOL (*RegDictFn)(id, SEL, NSDictionary *);
+                RegDictFn fn = (RegDictFn)[workspace methodForSelector:@selector(registerApplicationDictionary:)];
+                BOOL reg = fn(workspace, @selector(registerApplicationDictionary:), plist);
+                sweet_drm_log("UIRestore: registerApplicationDictionary for %s returned=%u", identifier.UTF8String, reg);
+            }
+        }
+        SEL lsRegSel = NSSelectorFromString(@"_LSRegisterURL:");
+        if ([workspace respondsToSelector:lsRegSel]) {
+            typedef BOOL (*RegUrlFn)(id, SEL, NSURL *);
+            RegUrlFn fn = (RegUrlFn)[workspace methodForSelector:lsRegSel];
+            BOOL reg = fn(workspace, lsRegSel, [NSURL fileURLWithPath:stage isDirectory:YES]);
+            sweet_drm_log("UIRestore: _LSRegisterURL for %s returned=%u", identifier.UTF8String, reg);
+        }
+        present = installedPath(identifier);
+    }
     sweet_drm_log("UIRestore: install %s returned=%u verified=%u error=%s", identifier.UTF8String,
         ok, present != nil, error.description.UTF8String ?: "none");
     /* Keep our input copy for failed-install diagnosis; never remove installer destinations. */
@@ -283,7 +324,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0177";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0178";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -338,6 +379,15 @@ int main(void)
             sweet_drm_log("UIRestore: CoreServices load failed: %s", dlerror());
         if (!dlopen("/System/Library/PrivateFrameworks/SpringBoardUIServices.framework/SpringBoardUIServices", RTLD_NOW | RTLD_LOCAL))
             sweet_drm_log("UIRestore: wallpaper framework load failed: %s", dlerror());
+        if (!dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit", RTLD_NOW | RTLD_LOCAL))
+            sweet_drm_log("UIRestore: PlugInKit load failed: %s", dlerror());
+        if (!dlopen("/System/Library/PrivateFrameworks/ExtensionKit.framework/ExtensionKit", RTLD_NOW | RTLD_LOCAL))
+            sweet_drm_log("UIRestore: ExtensionKit load failed: %s", dlerror());
+        if (!dlopen("/System/Library/PrivateFrameworks/DiagnosticExtensions.framework/DiagnosticExtensions", RTLD_NOW | RTLD_LOCAL))
+            sweet_drm_log("UIRestore: DiagnosticExtensions load failed: %s", dlerror());
+        dumpClassMethods(NSClassFromString(@"LSApplicationWorkspace"));
+        dumpClassMethods(NSClassFromString(@"PKExtensionPoint"));
+        dumpClassMethods(NSClassFromString(@"PKHost"));
         void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW | RTLD_LOCAL);
         CFTypeRef (*create)(CFAllocatorRef) = security ? dlsym(security, "SecTaskCreateFromSelf") : NULL;
         CFTypeRef (*copy)(CFTypeRef, CFStringRef, CFErrorRef *) = security ? dlsym(security, "SecTaskCopyValueForEntitlement") : NULL;
