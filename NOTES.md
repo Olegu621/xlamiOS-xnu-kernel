@@ -4,6 +4,23 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0181 native restoreSystemApplication & scanForForDeletableSystemApps; 0180 hardware result (2026-10-25)
+
+- Hardware Run 0180 SUCCESS & FINDINGS:
+  - Phone booted into native iOS 16 userland; full 210s diagnostic completed with 45,754 lines.
+  - Decoded POCO-F6-0180.png showing live iOS 16 GUI: status bar with 4:03 and battery 100%, icons for Photos, App Store, Settings, dock, and 2 "Waiting..." placeholder widgets.
+  - Complete selector dumps captured in helper-output.log:
+    Revealed first-party LaunchServices APIs designed for deletable system apps:
+    `restoreSystemApplication:`, `scanForForDeletableSystemApps`, `registerApplicationDictionary:withObserverNotification:`,
+    `_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:`, and `_LSPrivateSyncWithMobileInstallation`.
+  - InstalledPath analysis: previous `[path containsString:@"/staged_system_apps/"]` was mistakenly rejecting active restored system app bundles located in /private/var/staged_system_apps.
+- Fixes implemented in 0181:
+  1. Primary restoration via `restoreSystemApplication:` and `registerApplicationDictionary:` loaded directly from intact source bundle.
+  2. Added pre-loop `scanForForDeletableSystemApps` to activate all staged system applications.
+  3. Added post-loop `_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:` and `_LSPrivateSyncWithMobileInstallation`.
+  4. Updated `installedPath` to accept valid system bundles in /private/var/staged_system_apps and log exact proxy properties.
+  5. Advanced root to xlamiOS-Restore0181 and helper version to 181.
+
 ### 0180 remove raw disk read from stageBlockBlast, restore clean kernel 0165, add zero-plugin system apps (Calculator & Compass) (2026-10-25)
 
 - Analysis of Runs 0178 & 0179:

@@ -85,13 +85,20 @@ static NSString *installedPath(NSString *identifier)
     Class cls = NSClassFromString(@"LSApplicationProxy");
     if (!methodShape(cls, @selector(applicationProxyForIdentifier:), YES, 3, '@')) return nil;
     id proxy = [cls applicationProxyForIdentifier:identifier];
+    if (!proxy) return nil;
     Class actual = object_getClass(proxy);
-    if (!methodShape(actual, @selector(bundleURL), NO, 2, '@') ||
-        !methodShape(actual, @selector(isInstalled), NO, 2, 'B') || ![proxy isInstalled] ||
-        !methodShape(actual, @selector(isPlaceholder), NO, 2, 'B') || [proxy isPlaceholder]) return nil;
-    NSString *path = [proxy bundleURL].path;
-    if (!realDirectory(path) || [path containsString:@"/AppPlaceholders/"] ||
-        [path containsString:@"/staged_system_apps/"]) return nil;
+    BOOL hasInstalled = methodShape(actual, @selector(isInstalled), NO, 2, 'B');
+    BOOL hasPlaceholder = methodShape(actual, @selector(isPlaceholder), NO, 2, 'B');
+    BOOL hasUrl = methodShape(actual, @selector(bundleURL), NO, 2, '@');
+    BOOL isInst = hasInstalled && [proxy isInstalled];
+    BOOL isPlace = hasPlaceholder && [proxy isPlaceholder];
+    NSString *path = hasUrl ? [proxy bundleURL].path : nil;
+    if (!hasUrl || !isInst || isPlace) {
+        sweet_drm_log("UIRestore: proxy for %s: installed=%d placeholder=%d url=%s",
+            identifier.UTF8String, isInst, isPlace, path.UTF8String ?: "none");
+        return nil;
+    }
+    if (!realDirectory(path) || [path containsString:@"/AppPlaceholders/"]) return nil;
     NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]];
     return [info[@"CFBundleIdentifier"] isEqual:identifier] ? path : nil;
 }
@@ -100,10 +107,59 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
 {
     NSString *present = installedPath(identifier);
     if (present) return @{ @"status": @"already-installed", @"path": present };
+
     NSString *source = [@"/private/var/staged_system_apps" stringByAppendingPathComponent:name];
-    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[source stringByAppendingPathComponent:@"Info.plist"]];
-    if (!realDirectory(source) || ![info[@"CFBundleIdentifier"] isEqual:identifier])
+    if (!realDirectory(source)) {
         return @{ @"status": @"source-guard-refused" };
+    }
+    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[source stringByAppendingPathComponent:@"Info.plist"]];
+    if (![info[@"CFBundleIdentifier"] isEqual:identifier]) {
+        return @{ @"status": @"source-identifier-mismatch" };
+    }
+
+    sweet_drm_log("UIRestore: processing %s (pkg=%s)", identifier.UTF8String, [(NSString *)packageType UTF8String] ?: "none");
+
+    /* Step 1: For System apps, attempt first-party LaunchServices restore and dictionary registration */
+    if ([packageType isEqual:@"System"]) {
+        SEL restoreSysSel = NSSelectorFromString(@"restoreSystemApplication:");
+        if ([workspace respondsToSelector:restoreSysSel]) {
+            typedef BOOL (*RestoreSysFn)(id, SEL, NSString *);
+            RestoreSysFn fn = (RestoreSysFn)[workspace methodForSelector:restoreSysSel];
+            BOOL r = fn(workspace, restoreSysSel, identifier);
+            sweet_drm_log("UIRestore: restoreSystemApplication for %s returned=%u", identifier.UTF8String, r);
+        }
+
+        SEL regDictSel = NSSelectorFromString(@"registerApplicationDictionary:");
+        if ([workspace respondsToSelector:regDictSel] && info) {
+            typedef BOOL (*RegDictFn)(id, SEL, NSDictionary *);
+            RegDictFn fn = (RegDictFn)[workspace methodForSelector:regDictSel];
+            BOOL reg = fn(workspace, regDictSel, info);
+            sweet_drm_log("UIRestore: registerApplicationDictionary for %s returned=%u", identifier.UTF8String, reg);
+        }
+
+        SEL regDictObsSel = NSSelectorFromString(@"registerApplicationDictionary:withObserverNotification:");
+        if ([workspace respondsToSelector:regDictObsSel] && info) {
+            typedef BOOL (*RegDictObsFn)(id, SEL, NSDictionary *, BOOL);
+            RegDictObsFn fn = (RegDictObsFn)[workspace methodForSelector:regDictObsSel];
+            BOOL reg = fn(workspace, regDictObsSel, info, YES);
+            sweet_drm_log("UIRestore: registerApplicationDictionary:withObserverNotification for %s returned=%u", identifier.UTF8String, reg);
+        }
+
+        SEL regUrlSel = NSSelectorFromString(@"_LSRegisterURL:");
+        if ([workspace respondsToSelector:regUrlSel]) {
+            typedef BOOL (*RegUrlFn)(id, SEL, NSURL *);
+            RegUrlFn fn = (RegUrlFn)[workspace methodForSelector:regUrlSel];
+            BOOL reg = fn(workspace, regUrlSel, [NSURL fileURLWithPath:source isDirectory:YES]);
+            sweet_drm_log("UIRestore: _LSRegisterURL(source) for %s returned=%u", identifier.UTF8String, reg);
+        }
+
+        present = installedPath(identifier);
+        if (present) {
+            return @{ @"status": @"installed", @"path": present, @"method": @"LaunchServicesRestore" };
+        }
+    }
+
+    /* Step 2: Full MobileInstallation install via staging copy */
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *owned = [root stringByAppendingPathComponent:
         [NSString stringWithFormat:@"Source-%@", NSUUID.UUID.UUIDString]];
@@ -112,14 +168,11 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
     NSString *stage = [owned stringByAppendingPathComponent:name];
     NSError *error = nil;
     if (![fm copyItemAtPath:source toPath:stage error:&error]) {
-        /* Only the directory exclusively created by this operation can be removed. */
         if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
         return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
     }
-    /* Do not strip PlugIns or Extensions from genuine Apple system apps; doing so breaks the CodeResources seal and causes Code 13 (0xe8008001). */
-    const char *pkgStr = ([packageType isKindOfClass:[NSString class]]) ? [(NSString *)packageType UTF8String] : "none";
-    sweet_drm_log("UIRestore: native install begin %s (pkg=%s); original staged bundle retained",
-        identifier.UTF8String, pkgStr);
+
+    sweet_drm_log("UIRestore: native install begin %s (pkg=%s)", identifier.UTF8String, [(NSString *)packageType UTF8String] ?: "none");
     BOOL ok = NO;
     NSMutableDictionary *options = [NSMutableDictionary dictionary];
     options[@"CFBundleIdentifier"] = identifier;
@@ -132,44 +185,11 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         error = [NSError errorWithDomain:@"xlamiOS.UIRestore" code:1 userInfo:
             @{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""] }];
     }
+
     present = installedPath(identifier);
-    if (!ok || !present) {
-        if ([workspace respondsToSelector:@selector(registerApplicationDictionary:)]) {
-            NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:[stage stringByAppendingPathComponent:@"Info.plist"]];
-            if (plist) {
-                typedef BOOL (*RegDictFn)(id, SEL, NSDictionary *);
-                RegDictFn fn = (RegDictFn)[workspace methodForSelector:@selector(registerApplicationDictionary:)];
-                BOOL reg = fn(workspace, @selector(registerApplicationDictionary:), plist);
-                sweet_drm_log("UIRestore: registerApplicationDictionary for %s returned=%u", identifier.UTF8String, reg);
-            }
-        }
-        SEL lsRegSel = NSSelectorFromString(@"_LSRegisterURL:");
-        if ([workspace respondsToSelector:lsRegSel]) {
-            typedef BOOL (*RegUrlFn)(id, SEL, NSURL *);
-            RegUrlFn fn = (RegUrlFn)[workspace methodForSelector:lsRegSel];
-            BOOL reg = fn(workspace, lsRegSel, [NSURL fileURLWithPath:stage isDirectory:YES]);
-            sweet_drm_log("UIRestore: _LSRegisterURL for %s returned=%u", identifier.UTF8String, reg);
-        }
-        SEL lsRegOptSel = NSSelectorFromString(@"_LSRegisterURL:options:error:");
-        if ([workspace respondsToSelector:lsRegOptSel]) {
-            typedef BOOL (*RegUrlOptFn)(id, SEL, NSURL *, NSDictionary *, NSError **);
-            RegUrlOptFn fn = (RegUrlOptFn)[workspace methodForSelector:lsRegOptSel];
-            NSError *lsErr = nil;
-            BOOL reg = fn(workspace, lsRegOptSel, [NSURL fileURLWithPath:stage isDirectory:YES], options, &lsErr);
-            sweet_drm_log("UIRestore: _LSRegisterURL:options:error for %s returned=%u err=%s", identifier.UTF8String, reg, lsErr.description.UTF8String ?: "none");
-        }
-        SEL regAppSel = NSSelectorFromString(@"registerApplication:");
-        if ([workspace respondsToSelector:regAppSel]) {
-            typedef BOOL (*RegAppFn)(id, SEL, NSURL *);
-            RegAppFn fn = (RegAppFn)[workspace methodForSelector:regAppSel];
-            BOOL reg = fn(workspace, regAppSel, [NSURL fileURLWithPath:stage isDirectory:YES]);
-            sweet_drm_log("UIRestore: registerApplication for %s returned=%u", identifier.UTF8String, reg);
-        }
-        present = installedPath(identifier);
-    }
     sweet_drm_log("UIRestore: install %s returned=%u verified=%u error=%s", identifier.UTF8String,
         ok, present != nil, error.description.UTF8String ?: "none");
-    /* Keep our input copy for failed-install diagnosis; never remove installer destinations. */
+
     return @{ @"status": ok && present ? @"installed" : @"installation-failed",
               @"serviceReturned": @(ok), @"path": present ?: @"", @"sourceCopy": stage,
               @"errorDomain": error.domain ?: @"", @"errorCode": @(error.code),
@@ -218,7 +238,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0180";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0181";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -235,6 +255,16 @@ static BOOL restoreUserInterface(void)
                 sweet_drm_log("UIRestore: installation service ABI unavailable"); return NO;
             }
             id workspace = [cls defaultWorkspace];
+
+            /* Trigger initial scan for deletable system apps in /private/var/staged_system_apps */
+            SEL scanSel = NSSelectorFromString(@"scanForForDeletableSystemApps");
+            if ([workspace respondsToSelector:scanSel]) {
+                typedef void (*ScanFn)(id, SEL);
+                ScanFn fn = (ScanFn)[workspace methodForSelector:scanSel];
+                fn(workspace, scanSel);
+                sweet_drm_log("UIRestore: scanForForDeletableSystemApps completed");
+            }
+
             NSString *reportPath = [root stringByAppendingPathComponent:@"installation.plist"];
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
@@ -263,6 +293,23 @@ static BOOL restoreUserInterface(void)
                 report[host[1]] = result;
                 [report writeToFile:reportPath atomically:YES];
             }
+
+            /* Trigger LaunchServices database rebuild and mobile installation sync */
+            SEL rebuildSel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
+            if ([workspace respondsToSelector:rebuildSel]) {
+                typedef BOOL (*RebuildFn)(id, SEL, BOOL, BOOL, BOOL);
+                RebuildFn fn = (RebuildFn)[workspace methodForSelector:rebuildSel];
+                BOOL res = fn(workspace, rebuildSel, YES, YES, YES);
+                sweet_drm_log("UIRestore: _LSPrivateRebuildApplicationDatabases returned=%u", res);
+            }
+            SEL syncSel = NSSelectorFromString(@"_LSPrivateSyncWithMobileInstallation");
+            if ([workspace respondsToSelector:syncSel]) {
+                typedef void (*SyncFn)(id, SEL);
+                SyncFn fn = (SyncFn)[workspace methodForSelector:syncSel];
+                fn(workspace, syncSel);
+                sweet_drm_log("UIRestore: _LSPrivateSyncWithMobileInstallation completed");
+            }
+
             sweet_drm_log("UIRestore: host restoration attempts finished; verification pending");
             return success;
         }
