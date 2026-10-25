@@ -222,12 +222,13 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
             [fm removeItemAtPath:subPath error:nil];
         }
     }
+    const char *pkgStr = ([packageType isKindOfClass:[NSString class]]) ? [(NSString *)packageType UTF8String] : "none";
     sweet_drm_log("UIRestore: native install begin %s (pkg=%s); original staged bundle retained",
-        identifier.UTF8String, packageType ? packageType.UTF8String : "none");
+        identifier.UTF8String, pkgStr);
     BOOL ok = NO;
     NSMutableDictionary *options = [NSMutableDictionary dictionary];
     options[@"CFBundleIdentifier"] = identifier;
-    if (packageType && ![packageType isKindOfClass:[NSNull class]]) {
+    if ([packageType isKindOfClass:[NSString class]]) {
         options[@"PackageType"] = packageType;
     }
     @try {
@@ -288,7 +289,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0174";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0176";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -309,7 +310,7 @@ static BOOL restoreUserInterface(void)
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
-            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal", [NSNull null]],
+            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal"],
                                     @[@"Weather.app", @"com.apple.weather", @"System"],
                                     @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]]) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];

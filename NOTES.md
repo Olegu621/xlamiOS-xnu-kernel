@@ -4,6 +4,26 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0176 fix NSNull unrecognized selector in ui_restore_worker; 0175 hardware result (2026-10-25)
+
+- Hardware Run 0174 Root Cause Diagnosis:
+  - Kernel 0644 patch at 0x4ed2cc (rufsroot0) caused freeze at second 38 (flush #38, 2401 lines).
+  - Background daemons (e.g. analyticsd, diskarbitrationd) probe readable raw disk character devices, causing UFS command queue lockup and deadlock on sweet_ufs_lock.
+  - Conclusively proved: ufsroot0 and rufsroot0 MUST both remain strictly 0640.
+- Hardware Run 0175 SUCCESS:
+  - Kernel restored to rock-solid SHA 0f2a4996e866e01bce815a58e23ae9139cd398e0258201bad46d50b427d3a30b (0640).
+  - Image SHA 1182a392844cd0420af61f9210d234b7a91e2c8c9346e8d3b7fb98c7a92bd84e.
+  - Timed diagnostic capture completed full 210s; 4,427 lines captured; GPU sequence 236; screenshot decoded.
+  - Extracted HFS evidence from /private/var/mobile/Library/xlamiOS-Restore0174/:
+    1. helper-output.log captured exact exception:
+       `-[NSNull UTF8String]: unrecognized selector sent to instance 0x1e8d9e928`
+       `Terminating app due to uncaught exception 'NSInvalidArgumentException'`
+    2. Root cause: ui_restore_worker passed [NSNull null] in host array for MobileCal, and sweet_drm_log evaluated `packageType ? packageType.UTF8String : "none"`.
+- Fixes implemented in 0176:
+  1. Safe string conversion: `([packageType isKindOfClass:[NSString class]]) ? [(NSString *)packageType UTF8String] : "none"`.
+  2. MobileCal packageType set to default/omitted by using a 2-element array (no NSNull).
+  3. Advanced root to xlamiOS-Restore0176 and helper version to 176.
+
 ### 0174 scoped PackageType (System for system apps, Customer for BlockBlast) and 0644 rufsroot0 (2026-10-25)
 
 - Hardware Run 0173 SUCCESS:
