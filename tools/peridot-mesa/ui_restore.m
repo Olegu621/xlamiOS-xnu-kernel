@@ -20,7 +20,7 @@ void peridot_ui_restore(void)
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 35LL * NSEC_PER_SEC),
         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            const char *root = "/var/mobile/Library/xlamiOS-Restore0176";
+            const char *root = "/var/mobile/Library/xlamiOS-Restore0177";
             NSString *helperPath = [NSString stringWithFormat:@"%s/%s", root, ui_restore_filename];
             const char *path = helperPath.fileSystemRepresentation;
             struct stat st;

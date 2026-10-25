@@ -215,13 +215,7 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
         return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
     }
-    /* Remove all PlugIns and Extensions from staged app bundle so missing system extension point definitions don't block app installation */
-    for (NSString *sub in @[@"PlugIns", @"Extensions"]) {
-        NSString *subPath = [stage stringByAppendingPathComponent:sub];
-        if ([fm fileExistsAtPath:subPath]) {
-            [fm removeItemAtPath:subPath error:nil];
-        }
-    }
+    /* Do not strip PlugIns or Extensions from genuine Apple system apps; doing so breaks the CodeResources seal and causes Code 13 (0xe8008001). */
     const char *pkgStr = ([packageType isKindOfClass:[NSString class]]) ? [(NSString *)packageType UTF8String] : "none";
     sweet_drm_log("UIRestore: native install begin %s (pkg=%s); original staged bundle retained",
         identifier.UTF8String, pkgStr);
@@ -289,7 +283,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0176";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0177";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -310,7 +304,7 @@ static BOOL restoreUserInterface(void)
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
-            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal"],
+            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
                                     @[@"Weather.app", @"com.apple.weather", @"System"],
                                     @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]]) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];

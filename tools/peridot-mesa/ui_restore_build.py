@@ -54,5 +54,5 @@ def build(work, output, clang, common):
     (work / 'ui_restore_payload.h').write_text('#include <stddef.h>\n'
         'static const char ui_restore_filename[] = "xlamiOS-restore-' + digest[:16] + '";\n'
         'static const unsigned char ui_restore_payload[] = {' + ','.join(map(str, data)) + '};\n')
-    return dict(version=176, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    return dict(version=177, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                 binary_sha256=digest, bytes=len(data), entitlements=signed, xml_entitlements_verified=True)

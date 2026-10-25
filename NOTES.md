@@ -4,6 +4,25 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0177 intact system app bundles with PackageType System; 0176 hardware result (2026-10-25)
+
+- Hardware Run 0176 SUCCESS & BREAKTHROUGH:
+  - Phone booted into native iOS 16 userland; timed diagnostic capture completed full 210s.
+  - Image SHA 1115981b2da43eec14fe20edc8ad848d27b59e78e1dfcc75428331359fba7353; console SHA 07e466d713c2f94ca3c22ad4e803c5ea65e6484a0d92298c5ee25da6c3dc2f99.
+  - Screenshot outputs/POCO-F6-0176.png decoded.
+  - Helper log from /private/var/mobile/Library/xlamiOS-Restore0176/:
+    1. The `-[NSNull UTF8String]` crash from 0175 was completely eliminated. The helper ran to completion without crashing.
+    2. Default wallpaper restoration was requested; `wallpaper-before.plist` and `wallpaper-after.plist` were both written.
+    3. Weather.app with `PackageType: System`:
+       PASSED `MIInstallableBundle performVerificationWithError:` (Code 25 is gone!).
+       Reached `+[MICodeSigningVerifier _validateSignatureAndCopyInfoForURL:withOptions:error:]` and failed with Code 13 (0xe8008001).
+       Root cause: deleting `PlugIns/` broke the original Apple `CodeResources` seal.
+    4. MobileCal.app with `pkg=none` gave Code 25 because omitting `PackageType` defaults to `Customer`.
+- Fixes implemented in 0177:
+  1. Both MobileCal.app and Weather.app set to `PackageType: @"System"`.
+  2. Do not strip `PlugIns/` or `Extensions/` from genuine Apple system app bundles; preserving the intact `_CodeSignature/CodeResources` allows Apple's code signing validation to succeed.
+  3. Advanced root to xlamiOS-Restore0177 and helper version to 177.
+
 ### 0176 fix NSNull unrecognized selector in ui_restore_worker; 0175 hardware result (2026-10-25)
 
 - Hardware Run 0174 Root Cause Diagnosis:
