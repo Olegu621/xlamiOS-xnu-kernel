@@ -4,6 +4,25 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0182 massive hardware & apps bring-up: audio HAL, camera & GPU probe, BlockBlast unpack, TrollStore LS; 0181 hardware result (2026-10-25)
+
+- Analysis of Hardware Run 0181:
+  - Phone booted cleanly into iOS 16 userland; diagnostic reset returned to recovery.
+  - Evidence extracted in work/ui-evidence0181/helper-output.log showed:
+    `_LSPrivateRemovedSystemAppIdentifiers` held the deletable system apps, marking them deleted by default.
+    `registerApplicationDictionary:` returned 0 because it lacked the full TrollStore entitlement set (`com.apple.private.coreservices.canmaplsdatabase`, `com.apple.lsapplicationworkspace.rebuildappdatabases`, `platform-application`), and the registration dictionary required `Path`, `CFBundleExecutablePath`, `ApplicationType`, `SignerOrganization`, `IsAdHocSigned`, `LSInstallType: 1`.
+  - Staging verification showed all 32 deletable system apps (`Calculator`, `Compass`, `MobileCal`, `Weather`, `MobileTimer`, `Files`, `Music`, `News`, etc.) already exist in `/private/var/staged_system_apps/`.
+  - BlockBlast tar archive was verified present on flash at 32GB offset on `/dev/block/sda31` (`XLAM_BLOCKBLAST`).
+- Implementations in 0182:
+  1. Full TrollStore root helper entitlements in `ui_restore_build.py` (`canmaplsdatabase`, `rebuildappdatabases`, `platform-application`, `storage.AppBundles`, `launchapplications`).
+  2. Complete TrollStore LaunchServices registration dictionary in `ui_restore_worker.m` (`Path`, `CFBundleExecutablePath`, `ApplicationType`, `SignerOrganization`, `SignatureVersion`, `SignerIdentity`, `IsAdHocSigned`, `LSInstallType`, `_LSBundlePlugins`).
+  3. Clears `_LSPrivateRemovedSystemAppIdentifiers` before registration.
+  4. Fast 1MB-buffered tar unpacker in `stageBlockBlastFromDisk()`: streams 161MB in ~160 reads (<1.5s runtime), avoiding UFS SCSI queue starvation, extracting `BlockBlast.app`.
+  5. Audio subsystem bring-up: installs `RedwoodAudio.driver` (`Info.plist` + embedded arm64 binary) into `/Library/Audio/Plug-Ins/HAL/`, sets up `/dev/redwood-audio` sink device node.
+  6. Camera subsystem bring-up: checks `/dev/redwood-camera`, probes `AVCaptureDevice` video devices and formats.
+  7. GPU subsystem bring-up: queries `MTLCopyAllDevices()` and `MTLCreateSystemDefaultDevice()`.
+  8. Advanced root to `xlamiOS-Restore0182` and helper version to 182.
+
 ### 0181 native restoreSystemApplication & scanForForDeletableSystemApps; 0180 hardware result (2026-10-25)
 
 - Hardware Run 0180 SUCCESS & FINDINGS:

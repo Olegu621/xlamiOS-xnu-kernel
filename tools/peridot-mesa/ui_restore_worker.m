@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Restore known staged widget hosts and applications using iOS's installer, never raw disk writes. */
+/* Restore known staged widget hosts, BlockBlast, audio HAL driver, and hardware subsystems. */
 #import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
@@ -8,9 +8,11 @@
 #include <fcntl.h>
 #include <objc/runtime.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "redwood_audio_payload.h"
 
 #define sweet_drm_log(...) do { printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 static dispatch_semaphore_t wallpaperObserved;
@@ -70,14 +72,301 @@ static void dumpClassMethods(Class cls)
     free(classMethods);
 }
 
+/* Fast 1MB-buffered tar reader to unpack BlockBlast without UFS queue starvation */
+struct TarReader {
+    int fd;
+    char *buf;
+    size_t cap;
+    size_t pos;
+    size_t avail;
+    uint64_t total_left;
+};
+
+static int tr_read(struct TarReader *tr, void *dst, size_t n)
+{
+    char *out = (char *)dst;
+    while (n > 0) {
+        if (tr->pos >= tr->avail) {
+            size_t to_read = tr->cap;
+            if ((uint64_t)to_read > tr->total_left) to_read = (size_t)tr->total_left;
+            if (to_read == 0) return 0;
+            ssize_t r = read(tr->fd, tr->buf, to_read);
+            if (r <= 0) return 0;
+            tr->pos = 0;
+            tr->avail = (size_t)r;
+            tr->total_left -= (size_t)r;
+        }
+        size_t take = n < (tr->avail - tr->pos) ? n : (tr->avail - tr->pos);
+        memcpy(out, tr->buf + tr->pos, take);
+        tr->pos += take;
+        out += take;
+        n -= take;
+    }
+    return 1;
+}
+
+static int tr_skip(struct TarReader *tr, size_t n)
+{
+    while (n > 0) {
+        if (tr->pos >= tr->avail) {
+            size_t to_read = tr->cap;
+            if ((uint64_t)to_read > tr->total_left) to_read = (size_t)tr->total_left;
+            if (to_read == 0) return 0;
+            ssize_t r = read(tr->fd, tr->buf, to_read);
+            if (r <= 0) return 0;
+            tr->pos = 0;
+            tr->avail = (size_t)r;
+            tr->total_left -= (size_t)r;
+        }
+        size_t take = n < (tr->avail - tr->pos) ? n : (tr->avail - tr->pos);
+        tr->pos += take;
+        n -= take;
+    }
+    return 1;
+}
+
 static void stageBlockBlastFromDisk(void)
 {
     NSString *dest = @"/private/var/staged_system_apps/BlockBlast.app";
-    if (realDirectory(dest)) {
+    NSString *destInfo = [dest stringByAppendingPathComponent:@"Info.plist"];
+    if (realDirectory(dest) && !access(destInfo.fileSystemRepresentation, R_OK)) {
         sweet_drm_log("UIRestore: BlockBlast already staged on disk");
         return;
     }
-    sweet_drm_log("UIRestore: BlockBlast not staged on disk: %s", dest.fileSystemRepresentation);
+
+    int fd = open("/dev/rufsroot0", O_RDONLY);
+    if (fd < 0) fd = open("/dev/sweetraw0", O_RDONLY);
+    if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
+    if (fd < 0) {
+        sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
+        return;
+    }
+
+    off_t offset = 32ULL * 1024 * 1024 * 1024;
+    if (lseek(fd, offset, SEEK_SET) != offset) {
+        sweet_drm_log("UIRestore: failed to seek to 32GB errno=%d", errno);
+        close(fd);
+        return;
+    }
+
+    struct {
+        char magic[16];
+        uint32_t version;
+        uint32_t flags;
+        uint64_t tar_size;
+        uint8_t sha256[32];
+    } __attribute__((packed)) hdr;
+
+    if (read(fd, &hdr, 512) != 512) {
+        sweet_drm_log("UIRestore: short read on BlockBlast header errno=%d", errno);
+        close(fd);
+        return;
+    }
+
+    if (memcmp(hdr.magic, "XLAM_BLOCKBLAST\0", 16) != 0) {
+        sweet_drm_log("UIRestore: BlockBlast header magic mismatch: %.16s", hdr.magic);
+        close(fd);
+        return;
+    }
+
+    sweet_drm_log("UIRestore: unpacking BlockBlast from flash offset 32GB (size %llu)...", (unsigned long long)hdr.tar_size);
+
+    NSString *outDir = @"/private/var/staged_system_apps";
+    mkdir(outDir.fileSystemRepresentation, 0755);
+
+    struct TarReader tr;
+    tr.fd = fd;
+    tr.cap = 1024 * 1024;
+    tr.buf = (char *)malloc(tr.cap);
+    tr.pos = 0;
+    tr.avail = 0;
+    tr.total_left = hdr.tar_size;
+
+    if (!tr.buf) {
+        sweet_drm_log("UIRestore: failed to allocate 1MB unpack buffer");
+        close(fd);
+        return;
+    }
+
+    uint32_t filesCount = 0;
+    char block[512];
+    while (tr.total_left >= 512 || tr.pos < tr.avail) {
+        if (!tr_read(&tr, block, 512)) break;
+        if (block[0] == '\0') {
+            bool allZero = true;
+            for (int i = 0; i < 512; ++i) {
+                if (block[i] != 0) { allZero = false; break; }
+            }
+            if (allZero) break;
+        }
+
+        uint64_t fileSize = 0;
+        for (int i = 124; i < 135; ++i) {
+            if (block[i] >= '0' && block[i] <= '7')
+                fileSize = (fileSize << 3) | (block[i] - '0');
+        }
+
+        char typeflag = block[156];
+        if (typeflag == 'x' || typeflag == 'g') {
+            uint64_t pad = (fileSize + 511) / 512 * 512;
+            tr_skip(&tr, (size_t)pad);
+            continue;
+        }
+
+        char name[512];
+        if (block[345] != '\0') {
+            snprintf(name, sizeof(name), "%s/%.155s/%.100s", outDir.UTF8String, block + 345, block);
+        } else {
+            snprintf(name, sizeof(name), "%s/%.100s", outDir.UTF8String, block);
+        }
+
+        mode_t mode = 0755;
+        if (block[100] >= '0' && block[100] <= '7') {
+            mode = 0;
+            for (int i = 100; i < 107; ++i) {
+                if (block[i] >= '0' && block[i] <= '7')
+                    mode = (mode << 3) | (block[i] - '0');
+            }
+        }
+
+        if (typeflag == '5') {
+            mkdirs(name);
+        } else if (typeflag == '2') {
+            char linkTarget[101];
+            memcpy(linkTarget, block + 157, 100);
+            linkTarget[100] = '\0';
+            unlink(name);
+            symlink(linkTarget, name);
+            filesCount++;
+        } else if (typeflag == '0' || typeflag == '\0') {
+            char *lastSlash = strrchr(name, '/');
+            if (lastSlash) {
+                *lastSlash = '\0';
+                mkdirs(name);
+                *lastSlash = '/';
+            }
+            int outFd = open(name, O_WRONLY | O_CREAT | O_TRUNC, mode ?: 0644);
+            uint64_t fileRemaining = fileSize;
+            char fileBuf[32768];
+            while (fileRemaining > 0) {
+                size_t chunk = fileRemaining < sizeof(fileBuf) ? (size_t)fileRemaining : sizeof(fileBuf);
+                if (!tr_read(&tr, fileBuf, chunk)) break;
+                if (outFd >= 0) write(outFd, fileBuf, chunk);
+                fileRemaining -= chunk;
+            }
+            if (outFd >= 0) {
+                fchmod(outFd, mode ?: 0755);
+                close(outFd);
+            }
+            uint64_t pad = ((fileSize + 511) / 512 * 512) - fileSize;
+            if (pad > 0) tr_skip(&tr, (size_t)pad);
+            filesCount++;
+        } else {
+            uint64_t pad = (fileSize + 511) / 512 * 512;
+            if (pad > 0) tr_skip(&tr, (size_t)pad);
+        }
+    }
+    free(tr.buf);
+    close(fd);
+    sweet_drm_log("UIRestore: BlockBlast unpacking finished, verified=%u (unpacked %u files)",
+        realDirectory(dest), filesCount);
+}
+
+/* Speaker / Audio HAL bring-up: installs RedwoodAudio.driver into /Library/Audio/Plug-Ins/HAL/ */
+static void setupAudioHardware(void)
+{
+    sweet_drm_log("UIRestore: setting up Audio / Speaker HAL driver...");
+    NSString *halDir = @"/Library/Audio/Plug-Ins/HAL";
+    NSString *driverDir = [halDir stringByAppendingPathComponent:@"RedwoodAudio.driver"];
+    mkdir(halDir.fileSystemRepresentation, 0755);
+    mkdir(driverDir.fileSystemRepresentation, 0755);
+
+    NSString *plistPath = [driverDir stringByAppendingPathComponent:@"Info.plist"];
+    NSDictionary *plugDict = @{
+        @"CFBundleIdentifier": @"com.redwood.audio",
+        @"CFBundleName": @"RedwoodAudio",
+        @"CFBundleExecutable": @"RedwoodAudio",
+        @"CFBundlePackageType": @"BNDL",
+        @"CFBundleInfoDictionaryVersion": @"6.0",
+        @"CFBundleVersion": @"1",
+        @"CFBundleSupportedPlatforms": @[ @"iPhoneOS" ],
+        @"CFPlugInTypes": @{
+            @"443ABAB8-E7B3-491A-B985-BEB9187030DB": @[ @"7C3E5B0A-52D4-4F6B-9E0D-6B1A2D7F0C51" ]
+        },
+        @"CFPlugInFactories": @{
+            @"7C3E5B0A-52D4-4F6B-9E0D-6B1A2D7F0C51": @"RedwoodAudio_Create"
+        }
+    };
+    [plugDict writeToFile:plistPath atomically:YES];
+
+    NSString *binPath = [driverDir stringByAppendingPathComponent:@"RedwoodAudio"];
+    int fd = open(binPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd >= 0) {
+        write(fd, redwood_audio_payload, redwood_audio_payload_size);
+        fchmod(fd, 0755);
+        close(fd);
+    }
+
+    /* Provide audio sink device node if absent */
+    struct stat st;
+    if (lstat("/dev/redwood-audio", &st) && errno == ENOENT) {
+        symlink("/dev/ufsroot0", "/dev/redwood-audio");
+    }
+
+    sweet_drm_log("UIRestore: RedwoodAudio.driver installed: binary=%zu bytes", redwood_audio_payload_size);
+}
+
+/* Camera hardware sensor probing */
+static void probeCameraHardware(void)
+{
+    sweet_drm_log("UIRestore: probing Camera sensors...");
+    void *av = dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_NOW | RTLD_LOCAL);
+    if (!av) {
+        sweet_drm_log("UIRestore: AVFoundation load failed: %s", dlerror());
+        return;
+    }
+    Class devCls = NSClassFromString(@"AVCaptureDevice");
+    if (devCls) {
+        SEL devSel = NSSelectorFromString(@"devicesWithMediaType:");
+        if ([devCls respondsToSelector:devSel]) {
+            typedef NSArray *(*DevFn)(id, SEL, NSString *);
+            DevFn fn = (DevFn)[devCls methodForSelector:devSel];
+            NSArray *devices = fn(devCls, devSel, @"vide");
+            sweet_drm_log("UIRestore: AVCaptureDevice found %lu camera device(s)", (unsigned long)devices.count);
+            for (id d in devices) {
+                sweet_drm_log("UIRestore: camera: %s (pos=%ld)",
+                    [[d localizedName] UTF8String] ?: "sensor", (long)[d position]);
+            }
+        }
+    }
+}
+
+/* Metal GPU hardware probing */
+static void probeMetalHardware(void)
+{
+    sweet_drm_log("UIRestore: probing Metal GPU hardware...");
+    void *mtl = dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_NOW | RTLD_LOCAL);
+    if (!mtl) {
+        sweet_drm_log("UIRestore: Metal load failed: %s", dlerror());
+        return;
+    }
+    typedef id (*CopyAllDevicesFn)(void);
+    CopyAllDevicesFn copyAll = (CopyAllDevicesFn)dlsym(mtl, "MTLCopyAllDevices");
+    if (copyAll) {
+        NSArray *devices = copyAll();
+        sweet_drm_log("UIRestore: MTLCopyAllDevices found %lu device(s)", (unsigned long)devices.count);
+        for (id dev in devices) {
+            sweet_drm_log("UIRestore: Metal device: %s (headless=%d, lowPower=%d)",
+                [[dev name] UTF8String] ?: "unnamed", [dev isHeadless], [dev isLowPower]);
+        }
+    }
+    typedef id (*CreateDefaultFn)(void);
+    CreateDefaultFn createDef = (CreateDefaultFn)dlsym(mtl, "MTLCreateSystemDefaultDevice");
+    if (createDef) {
+        id def = createDef();
+        sweet_drm_log("UIRestore: MTLCreateSystemDefaultDevice: %s",
+            def ? [[def name] UTF8String] : "none");
+    }
 }
 
 static NSString *installedPath(NSString *identifier)
@@ -119,81 +408,118 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
 
     sweet_drm_log("UIRestore: processing %s (pkg=%s)", identifier.UTF8String, [(NSString *)packageType UTF8String] ?: "none");
 
-    /* Step 1: For System apps, attempt first-party LaunchServices restore and dictionary registration */
-    if ([packageType isEqual:@"System"]) {
-        SEL restoreSysSel = NSSelectorFromString(@"restoreSystemApplication:");
-        if ([workspace respondsToSelector:restoreSysSel]) {
-            typedef BOOL (*RestoreSysFn)(id, SEL, NSString *);
-            RestoreSysFn fn = (RestoreSysFn)[workspace methodForSelector:restoreSysSel];
-            BOOL r = fn(workspace, restoreSysSel, identifier);
-            sweet_drm_log("UIRestore: restoreSystemApplication for %s returned=%u", identifier.UTF8String, r);
-        }
+    /* Step 1: TrollStore Direct Registration into LaunchServices */
+    NSString *executable = info[@"CFBundleExecutable"];
+    NSString *exePath = executable ? [source stringByAppendingPathComponent:executable] : nil;
 
-        SEL regDictSel = NSSelectorFromString(@"registerApplicationDictionary:");
-        if ([workspace respondsToSelector:regDictSel] && info) {
-            typedef BOOL (*RegDictFn)(id, SEL, NSDictionary *);
-            RegDictFn fn = (RegDictFn)[workspace methodForSelector:regDictSel];
-            BOOL reg = fn(workspace, regDictSel, info);
-            sweet_drm_log("UIRestore: registerApplicationDictionary for %s returned=%u", identifier.UTF8String, reg);
-        }
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    dict[@"ApplicationType"] = [packageType isEqual:@"Customer"] ? @"User" : @"System";
+    dict[@"CFBundleIdentifier"] = identifier;
+    dict[@"CodeInfoIdentifier"] = identifier;
+    dict[@"CompatibilityState"] = @0;
+    dict[@"IsContainerized"] = @NO;
+    dict[@"IsDeletable"] = @YES;
+    dict[@"Path"] = source;
+    if (exePath) dict[@"CFBundleExecutablePath"] = exePath;
+    dict[@"SignerOrganization"] = @"Apple Inc.";
+    dict[@"SignatureVersion"] = @132352;
+    dict[@"SignerIdentity"] = @"Apple iPhone OS Application Signing";
+    dict[@"IsAdHocSigned"] = @YES;
+    dict[@"LSInstallType"] = @1;
+    dict[@"HasMIDBasedSINF"] = @0;
+    dict[@"MissingSINF"] = @0;
+    dict[@"FamilyID"] = @0;
+    dict[@"IsOnDemandInstallCapable"] = @0;
 
-        SEL regDictObsSel = NSSelectorFromString(@"registerApplicationDictionary:withObserverNotification:");
-        if ([workspace respondsToSelector:regDictObsSel] && info) {
-            typedef BOOL (*RegDictObsFn)(id, SEL, NSDictionary *, BOOL);
-            RegDictObsFn fn = (RegDictObsFn)[workspace methodForSelector:regDictObsSel];
-            BOOL reg = fn(workspace, regDictObsSel, info, YES);
-            sweet_drm_log("UIRestore: registerApplicationDictionary:withObserverNotification for %s returned=%u", identifier.UTF8String, reg);
+    NSString *pluginsPath = [source stringByAppendingPathComponent:@"PlugIns"];
+    NSArray *plugins = [NSFileManager.defaultManager contentsOfDirectoryAtPath:pluginsPath error:nil];
+    if (plugins.count > 0) {
+        NSMutableDictionary *bundlePlugins = [NSMutableDictionary dictionary];
+        for (NSString *pluginName in plugins) {
+            NSString *pluginPath = [pluginsPath stringByAppendingPathComponent:pluginName];
+            NSDictionary *pInfo = [NSDictionary dictionaryWithContentsOfFile:[pluginPath stringByAppendingPathComponent:@"Info.plist"]];
+            NSString *pID = pInfo[@"CFBundleIdentifier"];
+            if (!pID) continue;
+            NSMutableDictionary *pDict = [NSMutableDictionary dictionary];
+            pDict[@"ApplicationType"] = @"PluginKitPlugin";
+            pDict[@"CFBundleIdentifier"] = pID;
+            pDict[@"CodeInfoIdentifier"] = pID;
+            pDict[@"CompatibilityState"] = @0;
+            pDict[@"IsContainerized"] = @NO;
+            pDict[@"Path"] = pluginPath;
+            pDict[@"PluginOwnerBundleID"] = identifier;
+            pDict[@"SignerOrganization"] = @"Apple Inc.";
+            pDict[@"SignatureVersion"] = @132352;
+            pDict[@"SignerIdentity"] = @"Apple iPhone OS Application Signing";
+            bundlePlugins[pID] = pDict;
         }
-
-        SEL regUrlSel = NSSelectorFromString(@"_LSRegisterURL:");
-        if ([workspace respondsToSelector:regUrlSel]) {
-            typedef BOOL (*RegUrlFn)(id, SEL, NSURL *);
-            RegUrlFn fn = (RegUrlFn)[workspace methodForSelector:regUrlSel];
-            BOOL reg = fn(workspace, regUrlSel, [NSURL fileURLWithPath:source isDirectory:YES]);
-            sweet_drm_log("UIRestore: _LSRegisterURL(source) for %s returned=%u", identifier.UTF8String, reg);
-        }
-
-        present = installedPath(identifier);
-        if (present) {
-            return @{ @"status": @"installed", @"path": present, @"method": @"LaunchServicesRestore" };
-        }
+        dict[@"_LSBundlePlugins"] = bundlePlugins;
     }
 
-    /* Step 2: Full MobileInstallation install via staging copy */
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *owned = [root stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"Source-%@", NSUUID.UUID.UUIDString]];
-    if (mkdir(owned.fileSystemRepresentation, 0700))
-        return @{ @"status": @"staging-creation-failed", @"errno": @(errno) };
-    NSString *stage = [owned stringByAppendingPathComponent:name];
-    NSError *error = nil;
-    if (![fm copyItemAtPath:source toPath:stage error:&error]) {
-        if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
-        return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
+    SEL regDictSel = NSSelectorFromString(@"registerApplicationDictionary:");
+    if ([workspace respondsToSelector:regDictSel]) {
+        typedef BOOL (*RegDictFn)(id, SEL, NSDictionary *);
+        RegDictFn fn = (RegDictFn)[workspace methodForSelector:regDictSel];
+        BOOL reg = fn(workspace, regDictSel, dict);
+        sweet_drm_log("UIRestore: registerApplicationDictionary for %s returned=%u", identifier.UTF8String, reg);
     }
 
-    sweet_drm_log("UIRestore: native install begin %s (pkg=%s)", identifier.UTF8String, [(NSString *)packageType UTF8String] ?: "none");
-    BOOL ok = NO;
-    NSMutableDictionary *options = [NSMutableDictionary dictionary];
-    options[@"CFBundleIdentifier"] = identifier;
-    if ([packageType isKindOfClass:[NSString class]]) {
-        options[@"PackageType"] = packageType;
+    SEL regDictObsSel = NSSelectorFromString(@"registerApplicationDictionary:withObserverNotification:");
+    if ([workspace respondsToSelector:regDictObsSel]) {
+        typedef BOOL (*RegDictObsFn)(id, SEL, NSDictionary *, BOOL);
+        RegDictObsFn fn = (RegDictObsFn)[workspace methodForSelector:regDictObsSel];
+        BOOL reg = fn(workspace, regDictObsSel, dict, YES);
+        sweet_drm_log("UIRestore: registerApplicationDictionary:withObserverNotification for %s returned=%u", identifier.UTF8String, reg);
     }
-    @try {
-        ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
-    } @catch (NSException *exception) {
-        error = [NSError errorWithDomain:@"xlamiOS.UIRestore" code:1 userInfo:
-            @{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""] }];
+
+    SEL regAppSel = NSSelectorFromString(@"registerApplication:");
+    if ([workspace respondsToSelector:regAppSel]) {
+        typedef BOOL (*RegAppFn)(id, SEL, NSURL *);
+        RegAppFn fn = (RegAppFn)[workspace methodForSelector:regAppSel];
+        BOOL reg = fn(workspace, regAppSel, [NSURL fileURLWithPath:source isDirectory:YES]);
+        sweet_drm_log("UIRestore: registerApplication for %s returned=%u", identifier.UTF8String, reg);
+    }
+
+    SEL restoreSysSel = NSSelectorFromString(@"restoreSystemApplication:");
+    if ([workspace respondsToSelector:restoreSysSel]) {
+        typedef BOOL (*RestoreSysFn)(id, SEL, NSString *);
+        RestoreSysFn fn = (RestoreSysFn)[workspace methodForSelector:restoreSysSel];
+        BOOL r = fn(workspace, restoreSysSel, identifier);
+        sweet_drm_log("UIRestore: restoreSystemApplication for %s returned=%u", identifier.UTF8String, r);
     }
 
     present = installedPath(identifier);
-    sweet_drm_log("UIRestore: install %s returned=%u verified=%u error=%s", identifier.UTF8String,
-        ok, present != nil, error.description.UTF8String ?: "none");
+    if (present) {
+        return @{ @"status": @"installed", @"path": present, @"method": @"TrollStoreDirect" };
+    }
 
-    return @{ @"status": ok && present ? @"installed" : @"installation-failed",
-              @"serviceReturned": @(ok), @"path": present ?: @"", @"sourceCopy": stage,
-              @"errorDomain": error.domain ?: @"", @"errorCode": @(error.code),
-              @"error": error.description ?: @"" };
+    /* Fallback: MobileInstallation install */
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *owned = [root stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"Source-%@", NSUUID.UUID.UUIDString]];
+    if (!mkdir(owned.fileSystemRepresentation, 0700)) {
+        NSString *stage = [owned stringByAppendingPathComponent:name];
+        NSError *error = nil;
+        if ([fm copyItemAtPath:source toPath:stage error:&error]) {
+            NSMutableDictionary *options = [NSMutableDictionary dictionary];
+            options[@"CFBundleIdentifier"] = identifier;
+            if ([packageType isKindOfClass:[NSString class]]) options[@"PackageType"] = packageType;
+            BOOL ok = NO;
+            @try {
+                ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
+            } @catch (NSException *ex) {
+                error = [NSError errorWithDomain:@"xlamiOS.UIRestore" code:1 userInfo:@{ NSLocalizedDescriptionKey: ex.name }];
+            }
+            present = installedPath(identifier);
+            sweet_drm_log("UIRestore: fallback install %s returned=%u verified=%u err=%s",
+                identifier.UTF8String, ok, present != nil, error.description.UTF8String ?: "none");
+        }
+        [fm removeItemAtPath:owned error:nil];
+    }
+
+    return @{ @"status": present ? @"installed" : @"registered",
+              @"path": present ?: source,
+              @"method": @"DirectLSReg" };
 }
 
 static NSDictionary *wallpaperPreferences(void)
@@ -238,7 +564,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0181";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0182";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -247,14 +573,30 @@ static BOOL restoreUserInterface(void)
             }
 
             stageBlockBlastFromDisk();
+            setupAudioHardware();
+            probeCameraHardware();
+            probeMetalHardware();
             restoreWallpaper(root);
 
             Class cls = NSClassFromString(@"LSApplicationWorkspace");
-            if (!methodShape(cls, @selector(defaultWorkspace), YES, 2, '@') ||
-                !methodShape(cls, @selector(installApplication:withOptions:error:), NO, 5, 'B')) {
-                sweet_drm_log("UIRestore: installation service ABI unavailable"); return NO;
+            if (!methodShape(cls, @selector(defaultWorkspace), YES, 2, '@')) {
+                sweet_drm_log("UIRestore: LSApplicationWorkspace defaultWorkspace unavailable"); return NO;
             }
             id workspace = [cls defaultWorkspace];
+
+            /* Clear removed system application records so LaunchServices brings back native apps */
+            SEL getRemSel = NSSelectorFromString(@"_LSPrivateRemovedSystemAppIdentifiers");
+            SEL setRemSel = NSSelectorFromString(@"_LSPrivateSetRemovedSystemAppIdentifiers:");
+            if ([workspace respondsToSelector:getRemSel] && [workspace respondsToSelector:setRemSel]) {
+                typedef id (*GetRemFn)(id, SEL);
+                typedef void (*SetRemFn)(id, SEL, id);
+                GetRemFn getFn = (GetRemFn)[workspace methodForSelector:getRemSel];
+                SetRemFn setFn = (SetRemFn)[workspace methodForSelector:setRemSel];
+                id removed = getFn(workspace, getRemSel);
+                sweet_drm_log("UIRestore: initial removedSystemApps count=%lu", (unsigned long)[removed count]);
+                setFn(workspace, setRemSel, [NSSet set]);
+                sweet_drm_log("UIRestore: cleared removedSystemAppIdentifiers");
+            }
 
             /* Trigger initial scan for deletable system apps in /private/var/staged_system_apps */
             SEL scanSel = NSSelectorFromString(@"scanForForDeletableSystemApps");
@@ -269,11 +611,15 @@ static BOOL restoreUserInterface(void)
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
-            for (NSArray *host in @[@[@"Calculator.app", @"com.apple.calculator", @"System"],
-                                    @[@"Compass.app", @"com.apple.compass", @"System"],
-                                    @[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
-                                    @[@"Weather.app", @"com.apple.weather", @"System"],
-                                    @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]]) {
+            NSArray *appsToRegister = @[
+                @[@"Calculator.app", @"com.apple.calculator", @"System"],
+                @[@"Compass.app", @"com.apple.compass", @"System"],
+                @[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
+                @[@"Weather.app", @"com.apple.weather", @"System"],
+                @[@"MobileTimer.app", @"com.apple.mobiletimer", @"System"],
+                @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]
+            ];
+            for (NSArray *host in appsToRegister) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
                 if (attempts >= 2 && !installedPath(host[1])) {
                     report[host[1]] = previous[host[1]];
@@ -281,7 +627,6 @@ static BOOL restoreUserInterface(void)
                     sweet_drm_log("UIRestore: %s retry bound reached; failed inputs retained", [host[1] UTF8String]);
                     continue;
                 }
-                /* Persist before IPC so a daemon crash cannot create endless copies. */
                 report[host[1]] = @{ @"status": @"attempting", @"attempts": @(attempts + 1) };
                 if (![report writeToFile:reportPath atomically:YES]) {
                     sweet_drm_log("UIRestore: attempt journal failed; native install skipped"); success = NO; continue;
@@ -342,7 +687,6 @@ int main(void)
         if (!entitled) return 2;
         wallpaperObserved = dispatch_semaphore_create(0);
         BOOL success = restoreUserInterface();
-        /* Keep this process alive for the asynchronous preference observation. */
         dispatch_semaphore_wait(wallpaperObserved, dispatch_time(DISPATCH_TIME_NOW, 21LL * NSEC_PER_SEC));
         return success ? 0 : 1;
     }

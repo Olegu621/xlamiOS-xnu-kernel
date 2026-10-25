@@ -36,7 +36,24 @@ def build(work, output, clang, common):
     source = Path(__file__).with_name('ui_restore_worker.m')
     binary = output / 'xlamiOS-restore'
     entitlements = {
-        'com.apple.private.mobileinstall.allowedSPI': ['InstallForLaunchServices'],
+        'platform-application': True,
+        'com.apple.private.coreservices.canmaplsdatabase': True,
+        'com.apple.lsapplicationworkspace.rebuildappdatabases': True,
+        'com.apple.private.security.storage.AppBundles': True,
+        'com.apple.private.security.storage-exempt.heritable': True,
+        'com.apple.private.MobileInstallationHelperService.allowed': True,
+        'com.apple.private.MobileInstallationHelperService.InstallDaemonOpsEnabled': True,
+        'com.apple.springboard.launchapplications': True,
+        'com.apple.backboardd.launchapplications': True,
+        'com.apple.frontboard.launchapplications': True,
+        'com.apple.multitasking.termination': True,
+        'com.apple.private.mobileinstall.allowedSPI': [
+            'InstallForLaunchServices',
+            'Install',
+            'UninstallForLaunchServices',
+            'Uninstall',
+            'UpdatePlaceholderMetadata',
+        ],
         'com.apple.springboard.wallpaper-access': True,
         'com.apple.private.security.no-container': True,
     }
@@ -54,5 +71,5 @@ def build(work, output, clang, common):
     (work / 'ui_restore_payload.h').write_text('#include <stddef.h>\n'
         'static const char ui_restore_filename[] = "xlamiOS-restore-' + digest[:16] + '";\n'
         'static const unsigned char ui_restore_payload[] = {' + ','.join(map(str, data)) + '};\n')
-    return dict(version=181, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    return dict(version=182, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                 binary_sha256=digest, bytes=len(data), entitlements=signed, xml_entitlements_verified=True)
