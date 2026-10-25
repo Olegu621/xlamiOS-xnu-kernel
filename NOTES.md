@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0180 remove raw disk read from stageBlockBlast, restore clean kernel 0165, add zero-plugin system apps (Calculator & Compass) (2026-10-25)
+
+- Analysis of Runs 0178 & 0179:
+  - Both 0178 and 0179 hung at second 38 before display on.
+  - Root cause 1: Binary patching the clean kernel at 0x4ed2c4 and 0x861cd destabilized the kernel.
+  - Root cause 2: stageBlockBlastFromDisk() executed a 300,000-read loop of 512-byte blocks (read(fd, block, 512)) over the single polled SCSI queue in sweet_ufs.c, completely monopolizing the UFS bus and starving buffer cache.
+  - Fix: Restore pristine kernel ci0165 (SHA 0f2a4996e866e01bce815a58e23ae9139cd398e0258201bad46d50b427d3a30b). Remove the 512-byte raw disk loop from stageBlockBlastFromDisk().
+- Fixes implemented in 0180:
+  1. Safe stageBlockBlastFromDisk(): verifies if BlockBlast.app is staged without raw character disk reads.
+  2. Candidate applications: added Calculator.app (com.apple.calculator) and Compass.app (com.apple.compass), which have zero plugins and intact Apple signatures, bypassing Code 59.
+  3. Expanded LaunchServices fallback registration: added _LSRegisterURL:options:error: and registerApplication: selectors.
+  4. Full method dumps for LSApplicationWorkspace, PKExtensionPoint, PKHost to capture exact available registration APIs in helper log.
+  5. Advanced root to xlamiOS-Restore0180 and helper version to 180.
+
 ### 0177 intact system app bundles with PackageType System; 0176 hardware result (2026-10-25)
 
 - Hardware Run 0176 SUCCESS & BREAKTHROUGH:

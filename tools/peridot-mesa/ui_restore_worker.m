@@ -77,129 +77,7 @@ static void stageBlockBlastFromDisk(void)
         sweet_drm_log("UIRestore: BlockBlast already staged on disk");
         return;
     }
-
-    int fd = open("/dev/sweetraw0", O_RDONLY);
-    if (fd < 0) fd = open("/dev/rufsroot0", O_RDONLY);
-    if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
-    if (fd < 0) {
-        sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
-        return;
-    }
-    sweet_drm_log("UIRestore: raw disk device opened successfully fd=%d", fd);
-
-    off_t offset = 32ULL * 1024 * 1024 * 1024;
-    if (lseek(fd, offset, SEEK_SET) != offset) {
-        sweet_drm_log("UIRestore: failed to seek to 32GB errno=%d", errno);
-        close(fd);
-        return;
-    }
-
-    struct {
-        char magic[16];
-        uint32_t version;
-        uint32_t flags;
-        uint64_t tar_size;
-        uint8_t sha256[32];
-    } __attribute__((packed)) hdr;
-
-    if (read(fd, &hdr, 512) != 512) {
-        sweet_drm_log("UIRestore: short read on BlockBlast header errno=%d", errno);
-        close(fd);
-        return;
-    }
-
-    if (memcmp(hdr.magic, "XLAM_BLOCKBLAST\0", 16) != 0) {
-        sweet_drm_log("UIRestore: BlockBlast header magic mismatch: %.16s", hdr.magic);
-        close(fd);
-        return;
-    }
-
-    sweet_drm_log("UIRestore: unpacking BlockBlast from flash offset 32GB (size %llu)...", (unsigned long long)hdr.tar_size);
-
-    NSString *outDir = @"/private/var/staged_system_apps";
-    mkdir(outDir.fileSystemRepresentation, 0755);
-
-    uint64_t bytesLeft = hdr.tar_size;
-    uint32_t filesCount = 0;
-    char block[512];
-    while (bytesLeft >= 512) {
-        if (read(fd, block, 512) != 512) break;
-        bytesLeft -= 512;
-
-        if (block[0] == '\0') {
-            bool allZero = true;
-            for (int i = 0; i < 512; ++i) {
-                if (block[i] != 0) { allZero = false; break; }
-            }
-            if (allZero) break;
-        }
-
-        char name[512];
-        if (block[345] != '\0') {
-            snprintf(name, sizeof(name), "%s/%.155s/%.100s", outDir.UTF8String, block + 345, block);
-        } else {
-            snprintf(name, sizeof(name), "%s/%.100s", outDir.UTF8String, block);
-        }
-
-        uint64_t fileSize = 0;
-        for (int i = 124; i < 135; ++i) {
-            if (block[i] >= '0' && block[i] <= '7')
-                fileSize = (fileSize << 3) | (block[i] - '0');
-        }
-
-        mode_t mode = 0755;
-        if (block[100] >= '0' && block[100] <= '7') {
-            mode = 0;
-            for (int i = 100; i < 107; ++i) {
-                if (block[i] >= '0' && block[i] <= '7')
-                    mode = (mode << 3) | (block[i] - '0');
-            }
-        }
-
-        char typeflag = block[156];
-        if (typeflag == '5') {
-            mkdirs(name);
-        } else if (typeflag == '2') {
-            char linkTarget[101];
-            memcpy(linkTarget, block + 157, 100);
-            linkTarget[100] = '\0';
-            unlink(name);
-            symlink(linkTarget, name);
-            filesCount++;
-        } else if (typeflag == '0' || typeflag == '\0') {
-            char *lastSlash = strrchr(name, '/');
-            if (lastSlash) {
-                *lastSlash = '\0';
-                mkdirs(name);
-                *lastSlash = '/';
-            }
-            int outFd = open(name, O_WRONLY | O_CREAT | O_TRUNC, mode ?: 0644);
-            uint64_t fileRemaining = fileSize;
-            uint64_t padBlocks = (fileSize + 511) / 512;
-            for (uint64_t b = 0; b < padBlocks; ++b) {
-                if (bytesLeft < 512) break;
-                if (read(fd, block, 512) != 512) break;
-                bytesLeft -= 512;
-                if (outFd >= 0 && fileRemaining > 0) {
-                    size_t toWrite = fileRemaining < 512 ? fileRemaining : 512;
-                    write(outFd, block, toWrite);
-                    fileRemaining -= toWrite;
-                }
-            }
-            if (outFd >= 0) close(outFd);
-            filesCount++;
-        } else {
-            uint64_t padBlocks = (fileSize + 511) / 512;
-            for (uint64_t b = 0; b < padBlocks; ++b) {
-                if (bytesLeft < 512) break;
-                if (read(fd, block, 512) != 512) break;
-                bytesLeft -= 512;
-            }
-        }
-    }
-    close(fd);
-    sweet_drm_log("UIRestore: BlockBlast unpacking finished, verified=%u (unpacked %u files)",
-        realDirectory(dest), filesCount);
+    sweet_drm_log("UIRestore: BlockBlast not staged on disk: %s", dest.fileSystemRepresentation);
 }
 
 static NSString *installedPath(NSString *identifier)
@@ -272,6 +150,21 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
             BOOL reg = fn(workspace, lsRegSel, [NSURL fileURLWithPath:stage isDirectory:YES]);
             sweet_drm_log("UIRestore: _LSRegisterURL for %s returned=%u", identifier.UTF8String, reg);
         }
+        SEL lsRegOptSel = NSSelectorFromString(@"_LSRegisterURL:options:error:");
+        if ([workspace respondsToSelector:lsRegOptSel]) {
+            typedef BOOL (*RegUrlOptFn)(id, SEL, NSURL *, NSDictionary *, NSError **);
+            RegUrlOptFn fn = (RegUrlOptFn)[workspace methodForSelector:lsRegOptSel];
+            NSError *lsErr = nil;
+            BOOL reg = fn(workspace, lsRegOptSel, [NSURL fileURLWithPath:stage isDirectory:YES], options, &lsErr);
+            sweet_drm_log("UIRestore: _LSRegisterURL:options:error for %s returned=%u err=%s", identifier.UTF8String, reg, lsErr.description.UTF8String ?: "none");
+        }
+        SEL regAppSel = NSSelectorFromString(@"registerApplication:");
+        if ([workspace respondsToSelector:regAppSel]) {
+            typedef BOOL (*RegAppFn)(id, SEL, NSURL *);
+            RegAppFn fn = (RegAppFn)[workspace methodForSelector:regAppSel];
+            BOOL reg = fn(workspace, regAppSel, [NSURL fileURLWithPath:stage isDirectory:YES]);
+            sweet_drm_log("UIRestore: registerApplication for %s returned=%u", identifier.UTF8String, reg);
+        }
         present = installedPath(identifier);
     }
     sweet_drm_log("UIRestore: install %s returned=%u verified=%u error=%s", identifier.UTF8String,
@@ -325,7 +218,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0179";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0180";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -346,7 +239,9 @@ static BOOL restoreUserInterface(void)
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
             BOOL success = YES;
-            for (NSArray *host in @[@[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
+            for (NSArray *host in @[@[@"Calculator.app", @"com.apple.calculator", @"System"],
+                                    @[@"Compass.app", @"com.apple.compass", @"System"],
+                                    @[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
                                     @[@"Weather.app", @"com.apple.weather", @"System"],
                                     @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]]) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
