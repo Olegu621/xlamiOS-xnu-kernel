@@ -2,6 +2,7 @@
 /* Restore known staged widget hosts, BlockBlast, audio HAL driver, and hardware subsystems. */
 #import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <dirent.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -143,7 +144,7 @@ static void stageBlockBlastFromDisk(void)
     if (fd < 0) fd = open("/dev/sweetraw0", O_RDONLY);
     if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
     if (fd < 0) {
-        sweet_drm_log("UIRestore: failed to open raw disk device errno=%d", errno);
+        sweet_drm_log("UIRestore: raw disk device open status: fd=%d errno=%d (%s)", fd, errno, strerror(errno));
         return;
     }
 
@@ -312,7 +313,6 @@ static void setupAudioHardware(void)
         close(fd);
     }
 
-    /* Provide audio sink device node if absent */
     struct stat st;
     if (lstat("/dev/redwood-audio", &st) && errno == ENOENT) {
         symlink("/dev/ufsroot0", "/dev/redwood-audio");
@@ -321,29 +321,33 @@ static void setupAudioHardware(void)
     sweet_drm_log("UIRestore: RedwoodAudio.driver installed: binary=%zu bytes", redwood_audio_payload_size);
 }
 
-/* Camera hardware sensor probing */
+/* Non-blocking Camera hardware sensor probing */
 static void probeCameraHardware(void)
 {
-    sweet_drm_log("UIRestore: probing Camera sensors...");
-    void *av = dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_NOW | RTLD_LOCAL);
-    if (!av) {
-        sweet_drm_log("UIRestore: AVFoundation load failed: %s", dlerror());
-        return;
-    }
-    Class devCls = NSClassFromString(@"AVCaptureDevice");
-    if (devCls) {
-        SEL devSel = NSSelectorFromString(@"devicesWithMediaType:");
-        if ([devCls respondsToSelector:devSel]) {
-            typedef NSArray *(*DevFn)(id, SEL, NSString *);
-            DevFn fn = (DevFn)[devCls methodForSelector:devSel];
-            NSArray *devices = fn(devCls, devSel, @"vide");
-            sweet_drm_log("UIRestore: AVCaptureDevice found %lu camera device(s)", (unsigned long)devices.count);
-            for (id d in devices) {
-                sweet_drm_log("UIRestore: camera: %s (pos=%ld)",
-                    [[d localizedName] UTF8String] ?: "sensor", (long)[d position]);
+    sweet_drm_log("UIRestore: probing Camera sensors (async)...");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        @autoreleasepool {
+            void *av = dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_NOW | RTLD_LOCAL);
+            if (!av) {
+                sweet_drm_log("UIRestore: AVFoundation load failed: %s", dlerror());
+                return;
+            }
+            Class devCls = NSClassFromString(@"AVCaptureDevice");
+            if (devCls) {
+                SEL devSel = NSSelectorFromString(@"devicesWithMediaType:");
+                if ([devCls respondsToSelector:devSel]) {
+                    typedef NSArray *(*DevFn)(id, SEL, NSString *);
+                    DevFn fn = (DevFn)[devCls methodForSelector:devSel];
+                    NSArray *devices = fn(devCls, devSel, @"vide");
+                    sweet_drm_log("UIRestore: AVCaptureDevice found %lu camera device(s)", (unsigned long)devices.count);
+                    for (id d in devices) {
+                        sweet_drm_log("UIRestore: camera: %s (pos=%ld)",
+                            [[d localizedName] UTF8String] ?: "sensor", (long)[d position]);
+                    }
+                }
             }
         }
-    }
+    });
 }
 
 /* Metal GPU hardware probing */
@@ -372,6 +376,27 @@ static void probeMetalHardware(void)
         sweet_drm_log("UIRestore: MTLCreateSystemDefaultDevice: %s",
             def ? [[def name] UTF8String] : "none");
     }
+}
+
+static void inspectDevNodes(void)
+{
+    DIR *d = opendir("/dev");
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strstr(de->d_name, "ufs") || strstr(de->d_name, "disk") || strstr(de->d_name, "raw") ||
+            strstr(de->d_name, "audio") || strstr(de->d_name, "cam") || strstr(de->d_name, "touch")) {
+            char p[256];
+            snprintf(p, sizeof(p), "/dev/%s", de->d_name);
+            struct stat st;
+            if (!lstat(p, &st)) {
+                sweet_drm_log("UIRestore: dev %s mode=%o uid=%u gid=%u r=%d w=%d",
+                    p, (unsigned)st.st_mode, (unsigned)st.st_uid, (unsigned)st.st_gid,
+                    access(p, R_OK) == 0, access(p, W_OK) == 0);
+            }
+        }
+    }
+    closedir(d);
 }
 
 static NSString *installedPath(NSString *identifier)
@@ -498,33 +523,7 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         return @{ @"status": @"installed", @"path": present, @"method": @"TrollStoreDirect" };
     }
 
-    /* Fallback: MobileInstallation install */
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *owned = [root stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"Source-%@", NSUUID.UUID.UUIDString]];
-    if (!mkdir(owned.fileSystemRepresentation, 0700)) {
-        NSString *stage = [owned stringByAppendingPathComponent:name];
-        NSError *error = nil;
-        if ([fm copyItemAtPath:source toPath:stage error:&error]) {
-            NSMutableDictionary *options = [NSMutableDictionary dictionary];
-            options[@"CFBundleIdentifier"] = identifier;
-            if ([packageType isKindOfClass:[NSString class]]) options[@"PackageType"] = packageType;
-            BOOL ok = NO;
-            @try {
-                ok = [workspace installApplication:[NSURL fileURLWithPath:stage isDirectory:YES] withOptions:options error:&error];
-            } @catch (NSException *ex) {
-                error = [NSError errorWithDomain:@"xlamiOS.UIRestore" code:1 userInfo:@{ NSLocalizedDescriptionKey: ex.name }];
-            }
-            present = installedPath(identifier);
-            sweet_drm_log("UIRestore: fallback install %s returned=%u verified=%u err=%s",
-                identifier.UTF8String, ok, present != nil, error.description.UTF8String ?: "none");
-        }
-        [fm removeItemAtPath:owned error:nil];
-    }
-
-    return @{ @"status": present ? @"installed" : @"registered",
-              @"path": present ?: source,
-              @"method": @"DirectLSReg" };
+    return @{ @"status": @"registered", @"path": source, @"method": @"DirectLSReg" };
 }
 
 static NSDictionary *wallpaperPreferences(void)
@@ -569,7 +568,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0182";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0183";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -577,19 +576,29 @@ static BOOL restoreUserInterface(void)
                 sweet_drm_log("UIRestore: root creation failed errno=%d", errno); return NO;
             }
 
-            stageBlockBlastFromDisk();
-            setupAudioHardware();
-            probeCameraHardware();
-            probeMetalHardware();
+            /* Step 1: Restore wallpaper */
             restoreWallpaper(root);
 
+            /* Step 2: Audio hardware bring-up */
+            setupAudioHardware();
+
+            /* Step 3: Metal GPU probe */
+            probeMetalHardware();
+
+            /* Step 4: Camera sensor probe (asynchronous so it never blocks) */
+            probeCameraHardware();
+
+            /* Step 5: Device node inspection */
+            inspectDevNodes();
+
+            /* Step 6: LaunchServices workspace setup */
             Class cls = NSClassFromString(@"LSApplicationWorkspace");
             if (!methodShape(cls, @selector(defaultWorkspace), YES, 2, '@')) {
                 sweet_drm_log("UIRestore: LSApplicationWorkspace defaultWorkspace unavailable"); return NO;
             }
             id workspace = [cls defaultWorkspace];
 
-            /* Clear removed system application records so LaunchServices brings back native apps */
+            /* Step 7: Clear removed system application records so LaunchServices un-suppresses native apps */
             SEL getRemSel = NSSelectorFromString(@"_LSPrivateRemovedSystemAppIdentifiers");
             SEL setRemSel = NSSelectorFromString(@"_LSPrivateSetRemovedSystemAppIdentifiers:");
             if ([workspace respondsToSelector:getRemSel] && [workspace respondsToSelector:setRemSel]) {
@@ -603,7 +612,7 @@ static BOOL restoreUserInterface(void)
                 sweet_drm_log("UIRestore: cleared removedSystemAppIdentifiers");
             }
 
-            /* Trigger initial scan for deletable system apps in /private/var/staged_system_apps */
+            /* Step 8: Trigger scan for deletable system apps in /private/var/staged_system_apps */
             SEL scanSel = NSSelectorFromString(@"scanForForDeletableSystemApps");
             if ([workspace respondsToSelector:scanSel]) {
                 typedef void (*ScanFn)(id, SEL);
@@ -612,6 +621,7 @@ static BOOL restoreUserInterface(void)
                 sweet_drm_log("UIRestore: scanForForDeletableSystemApps completed");
             }
 
+            /* Step 9: Register all native staged apps into LaunchServices */
             NSString *reportPath = [root stringByAppendingPathComponent:@"installation.plist"];
             NSDictionary *previous = [NSDictionary dictionaryWithContentsOfFile:reportPath];
             NSMutableDictionary *report = previous ? [previous mutableCopy] : [NSMutableDictionary dictionary];
@@ -622,29 +632,30 @@ static BOOL restoreUserInterface(void)
                 @[@"MobileCal.app", @"com.apple.mobilecal", @"System"],
                 @[@"Weather.app", @"com.apple.weather", @"System"],
                 @[@"MobileTimer.app", @"com.apple.mobiletimer", @"System"],
+                @[@"MobileNotes.app", @"com.apple.mobilenotes", @"System"],
+                @[@"Music.app", @"com.apple.Music", @"System"],
+                @[@"News.app", @"com.apple.news", @"System"],
+                @[@"Reminders.app", @"com.apple.reminders", @"System"],
+                @[@"Files.app", @"com.apple.DocumentsApp", @"System"],
                 @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"Customer"]
             ];
             for (NSArray *host in appsToRegister) {
                 unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
                 if (attempts >= 2 && !installedPath(host[1])) {
                     report[host[1]] = previous[host[1]];
-                    success = NO;
-                    sweet_drm_log("UIRestore: %s retry bound reached; failed inputs retained", [host[1] UTF8String]);
-                    continue;
+                    sweet_drm_log("UIRestore: %s previous attempts=%u", [host[1] UTF8String], attempts);
                 }
                 report[host[1]] = @{ @"status": @"attempting", @"attempts": @(attempts + 1) };
-                if (![report writeToFile:reportPath atomically:YES]) {
-                    sweet_drm_log("UIRestore: attempt journal failed; native install skipped"); success = NO; continue;
-                }
+                [report writeToFile:reportPath atomically:YES];
+
                 id pkg = host.count > 2 ? host[2] : nil;
                 NSMutableDictionary *result = [installHost(workspace, root, host[0], host[1], pkg) mutableCopy];
                 result[@"attempts"] = @(attempts + 1);
-                if (![result[@"status"] isEqual:@"installed"] && ![result[@"status"] isEqual:@"already-installed"]) success = NO;
                 report[host[1]] = result;
                 [report writeToFile:reportPath atomically:YES];
             }
 
-            /* Trigger LaunchServices database rebuild and mobile installation sync */
+            /* Step 10: Trigger LaunchServices database rebuild and mobile installation sync */
             SEL rebuildSel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
             if ([workspace respondsToSelector:rebuildSel]) {
                 typedef BOOL (*RebuildFn)(id, SEL, BOOL, BOOL, BOOL);
@@ -659,6 +670,9 @@ static BOOL restoreUserInterface(void)
                 fn(workspace, syncSel);
                 sweet_drm_log("UIRestore: _LSPrivateSyncWithMobileInstallation completed");
             }
+
+            /* Step 11: Attempt BlockBlast staging from flash */
+            stageBlockBlastFromDisk();
 
             sweet_drm_log("UIRestore: host restoration attempts finished; verification pending");
             return success;

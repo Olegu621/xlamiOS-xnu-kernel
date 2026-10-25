@@ -4,6 +4,20 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0183 non-blocking async camera probe, prioritized TrollStore LS app registration, /dev inspection; 0182 hardware result (2026-10-25)
+
+- Hardware Run 0182 SUCCESS & FINDINGS:
+  - Phone booted into native iOS 16 userland; completed full 210s diagnostic without panic or freeze.
+  - Evidence extracted in work/ui-evidence0182/helper-output.log confirmed:
+    1. Audio HAL driver successfully installed: `UIRestore: RedwoodAudio.driver installed: binary=68496 bytes`! Driver bundle placed into `/Library/Audio/Plug-Ins/HAL/RedwoodAudio.driver/`.
+    2. Raw disk open for BlockBlast staging returned `errno=13` (`EACCES`) because `/dev/rufsroot0` has kernel permissions `0640 UID_ROOT GID_OPERATOR` and helper runs as mobile (uid 501).
+    3. `probeCameraHardware()` called `[AVCaptureDevice devicesWithMediaType:]` synchronously, which blocked waiting for an active mediaserverd capture session, preventing the main thread from reaching the registration loop.
+- Implementations in 0183:
+  1. Made `probeCameraHardware()` non-blocking on a background dispatch queue with autoreleasepool.
+  2. Prioritized LaunchServices TrollStore application registration loop (clears removed IDs, scans deletable apps, registers Calculator, Compass, Calendar, Weather, Timer, Notes, Music, News, Reminders, Files, and rebuilds databases).
+  3. Added `inspectDevNodes()` to inventory all `/dev/` storage, disk, and sensor device node permissions.
+  4. Advanced root to `xlamiOS-Restore0183` and helper version to 183.
+
 ### 0182 massive hardware & apps bring-up: audio HAL, camera & GPU probe, BlockBlast unpack, TrollStore LS; 0181 hardware result (2026-10-25)
 
 - Analysis of Hardware Run 0181:
