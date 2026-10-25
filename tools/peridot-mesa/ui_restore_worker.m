@@ -73,6 +73,13 @@ static NSDictionary *installHost(id workspace, NSString *root, NSString *name, N
         if (realDirectory(owned)) [fm removeItemAtPath:owned error:nil];
         return @{ @"status": @"copy-failed", @"error": error.description ?: @"unknown" };
     }
+    /* Remove known unsupported diagnostic extensions that lack system-level extension point definitions */
+    NSString *pluginsPath = [stage stringByAppendingPathComponent:@"PlugIns"];
+    for (NSString *sub in [fm contentsOfDirectoryAtPath:pluginsPath error:nil]) {
+        if ([sub containsString:@"DiagnosticExtension"]) {
+            [fm removeItemAtPath:[pluginsPath stringByAppendingPathComponent:sub] error:nil];
+        }
+    }
     sweet_drm_log("UIRestore: native install begin %s; original staged bundle retained", identifier.UTF8String);
     BOOL ok = NO;
     NSDictionary *options = @{ @"CFBundleIdentifier": identifier };
@@ -134,7 +141,7 @@ static void restoreWallpaper(NSString *root)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0169";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0170";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }

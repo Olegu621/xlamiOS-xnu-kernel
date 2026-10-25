@@ -4,6 +4,26 @@
 
 ## Active handoff (peridot, 2026-10-23, Codex continuation)
 
+### 0170 strip unsupported diagnostic appex; 0169 hardware result (2026-10-25)
+
+- 0169 commit 2edcfa6, Mesa CI 40149318886 SUCCESS.
+  Library SHA 215d1b8de995f8a4750d4a2c9a42df97fc6c736bf95511571494fde76b106344;
+  image SHA 1cb02c6a9cf37c1e6a3b558c81803940088ce58ee1c58fd09c07c6e8c6579690.
+  Auto recovery 277.75s; fresh console SHA 43fafda8f656704297740a87da7704459e6de41477406750c5b64dd297b2cd65.
+  Current userland log verified. Screenshot POCO-F6-0169.png (160x356, power=1).
+- Passing explicit @{ @"CFBundleIdentifier": identifier } in install options was ACCEPTED
+  by MobileInstallation / MIClientConnection. Code 25 ("Install options did not specify
+  a bundle identifier") is completely RESOLVED.
+- MIClientConnection proceeded to extract and validate app bundles, but failed with
+  MIInstallerErrorDomain Code 59:
+  "Appex bundle at .../MobileCal.app/PlugIns/CalendarDiagnosticExtension.appex with id
+  com.apple.mobilecal.diagnosticextension specifies a value (com.apple.diagnosticextensions-service)
+  for the NSExtensionPointIdentifier key in the NSExtension dictionary in its Info.plist
+  that does not correspond to a known extension point." (same for WeatherDiagnosticExtension).
+- 0170 strips *DiagnosticExtension.appex from staged bundle PlugIns/ before calling
+  installApplication:. The actual widget extensions (CalendarWidgetExtension, WeatherWidget)
+  and intents remain intact. Advanced root to xlamiOS-Restore0170 and helper version to 170.
+
 ### 0169 specify bundle identifier in native install options; 0168 hardware result (2026-10-25)
 
 - 0168 commit e61e273, Mesa CI 40141608212 SUCCESS.

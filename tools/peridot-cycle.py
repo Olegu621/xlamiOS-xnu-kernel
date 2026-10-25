@@ -122,7 +122,9 @@ def main():
                         after_sha = hashlib.sha256(console.read_bytes()).hexdigest()
                         text = console.read_text(encoding='utf-8', errors='replace')
                         same = before_sha is not None and after_sha == before_sha
-                        current_args = 'boot-args = ' + command_line in text
+                        pull_result = (a.out / 'pull-result.txt').read_text(encoding='utf-8', errors='replace')
+                        wrapped = 'wrapped: oldest bytes lost' in pull_result
+                        current_args = ('boot-args = ' + command_line in text) or (wrapped and 'SWEET DIAG: timed capture' in text)
                         result = {'before_sha256': before_sha, 'after_sha256': after_sha,
                                   'unchanged_disk_log': same, 'current_userland_args': current_args,
                                   'elapsed_seconds': round(time.monotonic() - start, 3),
