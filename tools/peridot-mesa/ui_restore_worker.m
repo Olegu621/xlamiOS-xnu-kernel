@@ -149,7 +149,9 @@ static void stageBlockBlastFromDisk(void)
     }
 
     off_t offset = 32ULL * 1024 * 1024 * 1024;
-    if (lseek(fd, offset, SEEK_SET) != offset) {
+    off_t seekRes = lseek(fd, offset, SEEK_SET);
+    sweet_drm_log("UIRestore: seek to 32GB: res=%lld errno=%d", (long long)seekRes, errno);
+    if (seekRes != offset) {
         sweet_drm_log("UIRestore: failed to seek to 32GB errno=%d", errno);
         close(fd);
         return;
@@ -548,28 +550,37 @@ static NSDictionary *wallpaperPreferences(void)
 static void restoreWallpaper(NSString *root)
 {
     NSString *backup = [root stringByAppendingPathComponent:@"wallpaper-before.plist"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:backup]) return;
+    if ([NSFileManager.defaultManager fileExistsAtPath:backup]) {
+        if (wallpaperObserved) dispatch_semaphore_signal(wallpaperObserved);
+        return;
+    }
     NSDictionary *values = wallpaperPreferences();
     for (NSString *key in @[@"SBHomeScreenWallpapers", @"SBLockScreenWallpapers"]) {
         id value = values[key];
         if (![value isKindOfClass:NSDictionary.class] || [value count] != 1 || !value[@"none"]) {
-            sweet_drm_log("UIRestore: existing wallpaper retained"); return;
+            sweet_drm_log("UIRestore: existing wallpaper retained");
+            if (wallpaperObserved) dispatch_semaphore_signal(wallpaperObserved);
+            return;
         }
     }
     Class service = NSClassFromString(@"SBSUIWallpaperService");
     if (!methodShape(service, @selector(restoreDefaultWallpaper), YES, 2, 'v')) {
-        sweet_drm_log("UIRestore: wallpaper service ABI unavailable"); return;
+        sweet_drm_log("UIRestore: wallpaper service ABI unavailable");
+        if (wallpaperObserved) dispatch_semaphore_signal(wallpaperObserved);
+        return;
     }
     if (![values writeToFile:backup atomically:YES]) {
-        sweet_drm_log("UIRestore: wallpaper backup failed; request skipped"); return;
+        sweet_drm_log("UIRestore: wallpaper backup failed; request skipped");
+        if (wallpaperObserved) dispatch_semaphore_signal(wallpaperObserved);
+        return;
     }
     [service restoreDefaultWallpaper];
     sweet_drm_log("UIRestore: native default-wallpaper restoration requested; visual result pending");
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20LL * NSEC_PER_SEC),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10LL * NSEC_PER_SEC),
         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             [wallpaperPreferences() writeToFile:[root stringByAppendingPathComponent:@"wallpaper-after.plist"] atomically:YES];
-            dispatch_semaphore_signal(wallpaperObserved);
+            if (wallpaperObserved) dispatch_semaphore_signal(wallpaperObserved);
         }
     });
 }
@@ -680,7 +691,7 @@ static void updateHomeScreenIconLayout(void)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0185";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0186";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -828,6 +839,10 @@ static BOOL restoreUserInterface(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    sweet_drm_log("UIRestore: helper main entry point reached");
+
     @autoreleasepool {
         if (!dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_NOW | RTLD_LOCAL))
             sweet_drm_log("UIRestore: CoreServices load failed: %s", dlerror());
@@ -853,7 +868,8 @@ int main(void)
         if (!entitled) return 2;
         wallpaperObserved = dispatch_semaphore_create(0);
         BOOL success = restoreUserInterface();
-        dispatch_semaphore_wait(wallpaperObserved, dispatch_time(DISPATCH_TIME_NOW, 21LL * NSEC_PER_SEC));
+        dispatch_semaphore_wait(wallpaperObserved, dispatch_time(DISPATCH_TIME_NOW, 12LL * NSEC_PER_SEC));
+        sweet_drm_log("UIRestore: helper execution complete, success=%d", success);
         return success ? 0 : 1;
     }
 }

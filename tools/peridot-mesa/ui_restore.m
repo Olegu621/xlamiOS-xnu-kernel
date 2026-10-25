@@ -20,7 +20,7 @@ void peridot_ui_restore(void)
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 35LL * NSEC_PER_SEC),
         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            const char *root = "/var/mobile/Library/xlamiOS-Restore0185";
+            const char *root = "/var/mobile/Library/xlamiOS-Restore0186";
             NSString *helperPath = [NSString stringWithFormat:@"%s/%s", root, ui_restore_filename];
             const char *path = helperPath.fileSystemRepresentation;
             struct stat st;
@@ -79,9 +79,9 @@ void peridot_ui_restore(void)
             char **environment = calloc(pairs.count + 1, sizeof(char *));
             if (!environment) { sweet_drm_log("UIRestore: helper environment allocation failed"); return; }
             for (NSUInteger index = 0; index < pairs.count; ++index) environment[index] = (char *)pairs[index].UTF8String;
-            NSString *logName = [NSString stringWithFormat:@"helper-output-%@.log", NSUUID.UUID.UUIDString];
-            NSString *logPath = [[NSString stringWithUTF8String:root] stringByAppendingPathComponent:logName];
-            int output = open(logPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+            NSString *logName = @"helper-output.log";
+            NSString *logPath = [NSString stringWithFormat:@"%s/%@", root, logName];
+            int output = open(logPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
             if (output >= 0 && output < 3) {
                 int higher = fcntl(output, F_DUPFD_CLOEXEC, 3); close(output); output = higher;
             }
@@ -92,11 +92,17 @@ void peridot_ui_restore(void)
             if (!error) error = posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
             if (!error) error = posix_spawn_file_actions_adddup2(&actions, output, STDERR_FILENO);
             if (!error) error = posix_spawn_file_actions_addclose(&actions, output);
-            if (!error && ![logName writeToFile:[[NSString stringWithUTF8String:root] stringByAppendingPathComponent:@"last-helper-log.txt"]
-                atomically:YES encoding:NSUTF8StringEncoding error:nil]) error = EIO;
             if (error) {
                 if (initialized) posix_spawn_file_actions_destroy(&actions);
                 close(output); free(environment); sweet_drm_log("UIRestore: helper log setup failed error=%d", error); return;
+            }
+            char idxPath[256];
+            snprintf(idxPath, sizeof(idxPath), "%s/last-helper-log.txt", root);
+            int ifd = open(idxPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+            if (ifd >= 0) {
+                const char *idxContent = "helper-output.log\n";
+                write(ifd, idxContent, strlen(idxContent));
+                close(ifd);
             }
             pid_t child = 0;
             error = posix_spawn(&child, path, &actions, NULL, arguments, environment);
