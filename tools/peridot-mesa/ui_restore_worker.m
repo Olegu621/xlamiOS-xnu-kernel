@@ -143,8 +143,8 @@ static void stageBlockBlastFromDisk(void)
     int fd = open("/dev/rufsroot0", O_RDONLY);
     if (fd < 0) fd = open("/dev/sweetraw0", O_RDONLY);
     if (fd < 0) fd = open("/dev/ufsroot0", O_RDONLY);
+    sweet_drm_log("UIRestore: raw disk device open status: fd=%d errno=%d", fd, errno);
     if (fd < 0) {
-        sweet_drm_log("UIRestore: raw disk device open status: fd=%d errno=%d (%s)", fd, errno, strerror(errno));
         return;
     }
 
@@ -361,7 +361,7 @@ static void probeCameraHardware(void)
     });
 }
 
-/* Metal & OpenGLES GPU hardware probing */
+/* Metal & GPU hardware probing */
 static void probeMetalHardware(void)
 {
     sweet_drm_log("UIRestore: probing Metal & GPU hardware...");
@@ -383,32 +383,6 @@ static void probeMetalHardware(void)
             id def = createDef();
             sweet_drm_log("UIRestore: MTLCreateSystemDefaultDevice: %s",
                 def ? [[def name] UTF8String] : "none");
-        }
-    }
-
-    void *gles = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_NOW | RTLD_LOCAL);
-    if (gles) {
-        Class eaglCls = NSClassFromString(@"EAGLContext");
-        if (eaglCls) {
-            SEL initSel = NSSelectorFromString(@"initWithAPI:");
-            SEL setCtxSel = NSSelectorFromString(@"setCurrentContext:");
-            if ([eaglCls instancesRespondToSelector:initSel] && [eaglCls respondsToSelector:setCtxSel]) {
-                typedef id (*InitWithAPIFn)(id, SEL, NSUInteger);
-                typedef BOOL (*SetCtxFn)(id, SEL, id);
-                InitWithAPIFn initFn = (InitWithAPIFn)[eaglCls instanceMethodForSelector:initSel];
-                SetCtxFn setFn = (SetCtxFn)[eaglCls methodForSelector:setCtxSel];
-                id ctx = initFn([eaglCls alloc], initSel, 3);
-                if (!ctx) ctx = initFn([eaglCls alloc], initSel, 2);
-                if (ctx) {
-                    setFn(eaglCls, setCtxSel, ctx);
-                    typedef const char *(*GlGetStringFn)(unsigned int);
-                    GlGetStringFn glStr = (GlGetStringFn)dlsym(RTLD_DEFAULT, "glGetString");
-                    if (glStr) {
-                        sweet_drm_log("UIRestore: OpenGLES active: renderer=%s, version=%s, vendor=%s",
-                            glStr(0x1F01) ?: "unknown", glStr(0x1F02) ?: "unknown", glStr(0x1F00) ?: "unknown");
-                    }
-                }
-            }
         }
     }
 }
@@ -706,7 +680,7 @@ static void updateHomeScreenIconLayout(void)
 static BOOL restoreUserInterface(void)
 {
         @autoreleasepool {
-            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0184";
+            NSString *root = @"/var/mobile/Library/xlamiOS-Restore0185";
             struct stat st;
             if (!lstat(root.fileSystemRepresentation, &st)) {
                 if (!realDirectory(root)) { sweet_drm_log("UIRestore: root guard refused"); return NO; }
@@ -715,25 +689,32 @@ static BOOL restoreUserInterface(void)
             }
 
             /* Step 1: Restore wallpaper */
-            restoreWallpaper(root);
+            @try { restoreWallpaper(root); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: wallpaper error: %s", e.reason.UTF8String); }
 
             /* Step 2: Audio hardware bring-up */
-            setupAudioHardware();
+            @try { setupAudioHardware(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: audio error: %s", e.reason.UTF8String); }
 
-            /* Step 3: Metal & OpenGLES GPU probe */
-            probeMetalHardware();
+            /* Step 3: Metal GPU probe */
+            @try { probeMetalHardware(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: metal error: %s", e.reason.UTF8String); }
 
             /* Step 4: Camera sensor probe (asynchronous so it never blocks) */
-            probeCameraHardware();
+            @try { probeCameraHardware(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: camera error: %s", e.reason.UTF8String); }
 
             /* Step 5: Device node inspection */
-            inspectDevNodes();
+            @try { inspectDevNodes(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: dev inspection error: %s", e.reason.UTF8String); }
 
             /* Step 6: Log System Hardware Telemetry (Battery, Thermals, Display) */
-            logSystemTelemetry();
+            @try { logSystemTelemetry(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: telemetry error: %s", e.reason.UTF8String); }
 
             /* Step 7: Unpack BlockBlast from flash offset 32GB BEFORE LS registration */
-            stageBlockBlastFromDisk();
+            @try { stageBlockBlastFromDisk(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: stageBlockBlast error: %s", e.reason.UTF8String); }
 
             /* Step 8: LaunchServices workspace setup */
             Class cls = NSClassFromString(@"LSApplicationWorkspace");
@@ -743,27 +724,31 @@ static BOOL restoreUserInterface(void)
             id workspace = [cls defaultWorkspace];
 
             /* Step 9: Clear removed system application records so LaunchServices un-suppresses native apps */
-            SEL getRemSel = NSSelectorFromString(@"_LSPrivateRemovedSystemAppIdentifiers");
-            SEL setRemSel = NSSelectorFromString(@"_LSPrivateSetRemovedSystemAppIdentifiers:");
-            if ([workspace respondsToSelector:getRemSel] && [workspace respondsToSelector:setRemSel]) {
-                typedef id (*GetRemFn)(id, SEL);
-                typedef void (*SetRemFn)(id, SEL, id);
-                GetRemFn getFn = (GetRemFn)[workspace methodForSelector:getRemSel];
-                SetRemFn setFn = (SetRemFn)[workspace methodForSelector:setRemSel];
-                id removed = getFn(workspace, getRemSel);
-                sweet_drm_log("UIRestore: initial removedSystemApps count=%lu", (unsigned long)[removed count]);
-                setFn(workspace, setRemSel, [NSSet set]);
-                sweet_drm_log("UIRestore: cleared removedSystemAppIdentifiers");
-            }
+            @try {
+                SEL getRemSel = NSSelectorFromString(@"_LSPrivateRemovedSystemAppIdentifiers");
+                SEL setRemSel = NSSelectorFromString(@"_LSPrivateSetRemovedSystemAppIdentifiers:");
+                if ([workspace respondsToSelector:getRemSel] && [workspace respondsToSelector:setRemSel]) {
+                    typedef id (*GetRemFn)(id, SEL);
+                    typedef void (*SetRemFn)(id, SEL, id);
+                    GetRemFn getFn = (GetRemFn)[workspace methodForSelector:getRemSel];
+                    SetRemFn setFn = (SetRemFn)[workspace methodForSelector:setRemSel];
+                    id removed = getFn(workspace, getRemSel);
+                    sweet_drm_log("UIRestore: initial removedSystemApps count=%lu", (unsigned long)[removed count]);
+                    setFn(workspace, setRemSel, [NSSet set]);
+                    sweet_drm_log("UIRestore: cleared removedSystemAppIdentifiers");
+                }
+            } @catch (NSException *e) { sweet_drm_log("UIRestore: clear removed error: %s", e.reason.UTF8String); }
 
             /* Step 10: Trigger scan for deletable system apps in /private/var/staged_system_apps */
-            SEL scanSel = NSSelectorFromString(@"scanForForDeletableSystemApps");
-            if ([workspace respondsToSelector:scanSel]) {
-                typedef void (*ScanFn)(id, SEL);
-                ScanFn fn = (ScanFn)[workspace methodForSelector:scanSel];
-                fn(workspace, scanSel);
-                sweet_drm_log("UIRestore: scanForForDeletableSystemApps completed");
-            }
+            @try {
+                SEL scanSel = NSSelectorFromString(@"scanForForDeletableSystemApps");
+                if ([workspace respondsToSelector:scanSel]) {
+                    typedef void (*ScanFn)(id, SEL);
+                    ScanFn fn = (ScanFn)[workspace methodForSelector:scanSel];
+                    fn(workspace, scanSel);
+                    sweet_drm_log("UIRestore: scanForForDeletableSystemApps completed");
+                }
+            } @catch (NSException *e) { sweet_drm_log("UIRestore: scan deletable error: %s", e.reason.UTF8String); }
 
             /* Step 11: Register all native staged apps and BlockBlast into LaunchServices */
             NSString *reportPath = [root stringByAppendingPathComponent:@"installation.plist"];
@@ -784,48 +769,57 @@ static BOOL restoreUserInterface(void)
                 @[@"BlockBlast.app", @"com.blockblast.vn.ios", @"System"]
             ];
             for (NSArray *host in appsToRegister) {
-                unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
-                if (attempts >= 2 && !installedPath(host[1])) {
-                    report[host[1]] = previous[host[1]];
-                    sweet_drm_log("UIRestore: %s previous attempts=%u", [host[1] UTF8String], attempts);
-                }
-                report[host[1]] = @{ @"status": @"attempting", @"attempts": @(attempts + 1) };
-                [report writeToFile:reportPath atomically:YES];
+                @try {
+                    unsigned attempts = [previous[host[1]][@"attempts"] unsignedIntValue];
+                    if (attempts >= 2 && !installedPath(host[1])) {
+                        report[host[1]] = previous[host[1]];
+                        sweet_drm_log("UIRestore: %s previous attempts=%u", [host[1] UTF8String], attempts);
+                    }
+                    report[host[1]] = @{ @"status": @"attempting", @"attempts": @(attempts + 1) };
+                    [report writeToFile:reportPath atomically:YES];
 
-                id pkg = host.count > 2 ? host[2] : nil;
-                NSMutableDictionary *result = [installHost(workspace, root, host[0], host[1], pkg) mutableCopy];
-                result[@"attempts"] = @(attempts + 1);
-                report[host[1]] = result;
-                [report writeToFile:reportPath atomically:YES];
+                    id pkg = host.count > 2 ? host[2] : nil;
+                    NSMutableDictionary *result = [installHost(workspace, root, host[0], host[1], pkg) mutableCopy];
+                    result[@"attempts"] = @(attempts + 1);
+                    report[host[1]] = result;
+                    [report writeToFile:reportPath atomically:YES];
+                } @catch (NSException *e) {
+                    sweet_drm_log("UIRestore: error registering %s: %s", [host[1] UTF8String], e.reason.UTF8String);
+                }
             }
 
             /* Step 12: Trigger LaunchServices database rebuild and mobile installation sync */
-            SEL rebuildSel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
-            if ([workspace respondsToSelector:rebuildSel]) {
-                typedef BOOL (*RebuildFn)(id, SEL, BOOL, BOOL, BOOL);
-                RebuildFn fn = (RebuildFn)[workspace methodForSelector:rebuildSel];
-                BOOL res = fn(workspace, rebuildSel, YES, YES, YES);
-                sweet_drm_log("UIRestore: _LSPrivateRebuildApplicationDatabases returned=%u", res);
-            }
-            SEL syncSel = NSSelectorFromString(@"_LSPrivateSyncWithMobileInstallation");
-            if ([workspace respondsToSelector:syncSel]) {
-                typedef void (*SyncFn)(id, SEL);
-                SyncFn fn = (SyncFn)[workspace methodForSelector:syncSel];
-                fn(workspace, syncSel);
-                sweet_drm_log("UIRestore: _LSPrivateSyncWithMobileInstallation completed");
-            }
+            @try {
+                SEL rebuildSel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
+                if ([workspace respondsToSelector:rebuildSel]) {
+                    typedef BOOL (*RebuildFn)(id, SEL, BOOL, BOOL, BOOL);
+                    RebuildFn fn = (RebuildFn)[workspace methodForSelector:rebuildSel];
+                    BOOL res = fn(workspace, rebuildSel, YES, YES, YES);
+                    sweet_drm_log("UIRestore: _LSPrivateRebuildApplicationDatabases returned=%u", res);
+                }
+                SEL syncSel = NSSelectorFromString(@"_LSPrivateSyncWithMobileInstallation");
+                if ([workspace respondsToSelector:syncSel]) {
+                    typedef void (*SyncFn)(id, SEL);
+                    SyncFn fn = (SyncFn)[workspace methodForSelector:syncSel];
+                    fn(workspace, syncSel);
+                    sweet_drm_log("UIRestore: _LSPrivateSyncWithMobileInstallation completed");
+                }
+            } @catch (NSException *e) { sweet_drm_log("UIRestore: rebuild/sync error: %s", e.reason.UTF8String); }
 
             /* Step 13: Inject BlockBlast and newly installed apps into SpringBoard IconState.plist Page 0 */
-            updateHomeScreenIconLayout();
+            @try { updateHomeScreenIconLayout(); }
+            @catch (NSException *e) { sweet_drm_log("UIRestore: icon layout error: %s", e.reason.UTF8String); }
 
             /* Step 14: Invalidate icon cache so SpringBoard presents updated icons immediately */
-            SEL invSel = NSSelectorFromString(@"invalidateIconCache:");
-            if ([workspace respondsToSelector:invSel]) {
-                typedef void (*InvFn)(id, SEL, id);
-                InvFn fn = (InvFn)[workspace methodForSelector:invSel];
-                fn(workspace, invSel, nil);
-                sweet_drm_log("UIRestore: invalidateIconCache completed");
-            }
+            @try {
+                SEL invSel = NSSelectorFromString(@"invalidateIconCache:");
+                if ([workspace respondsToSelector:invSel]) {
+                    typedef void (*InvFn)(id, SEL, id);
+                    InvFn fn = (InvFn)[workspace methodForSelector:invSel];
+                    fn(workspace, invSel, nil);
+                    sweet_drm_log("UIRestore: invalidateIconCache completed");
+                }
+            } @catch (NSException *e) { sweet_drm_log("UIRestore: invalidate icon cache error: %s", e.reason.UTF8String); }
 
             sweet_drm_log("UIRestore: host restoration attempts finished; verification pending");
             return success;
